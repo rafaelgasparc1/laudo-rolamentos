@@ -62,7 +62,6 @@ st.markdown(
             margin-top: 6px;
             margin-bottom: 0;
         }
-        /* Força visualização em letras maiúsculas enquanto o usuário digita */
         div[data-testid="stTextInput"] input {
             text-transform: uppercase !important;
             font-weight: 700;
@@ -181,6 +180,11 @@ CONFIG_PADRAO_OUTROS = {
 
 RPM_BASE_REFERENCIA = 1750.0
 FREQUENCIAS_FALHA_BASE = {"BPFO": 83.0, "BPFI": 128.4, "BSF": 53.1}
+NOMES_COMPONENTES = {
+    "BPFO": "PISTA EXTERNA (BPFO)",
+    "BPFI": "PISTA INTERNA (BPFI)",
+    "BSF": "ELEMENTOS ROLANTES (BSF)",
+}
 CORES_FALHA = {"BPFO": "red", "BPFI": "blue", "BSF": "green"}
 
 
@@ -236,7 +240,7 @@ with col_header:
       <div class="aero-banner" style="margin-bottom:0;">
           <div class="aero-tag">✈️ MANAUS • OPERAÇÃO AEROPORTUÁRIA • MANUTENÇÃO PREDITIVA</div>
           <div class="aero-title">Análise Acústica de Rolamentos</div>
-          <div class="aero-sub">Rotação automática por tag, isolamento de sinal e emissão de laudo técnico.</div>
+          <div class="aero-sub">Leitura espectral de envoltória, rotação por tag e emissão de laudo técnico.</div>
       </div>
       """,
       unsafe_allow_html=True,
@@ -288,7 +292,7 @@ uploaded_file = st.file_uploader(
 
 
 def enviar_para_planilha(
-    data_hora, tipo, subtipo, trecho, rpm_faixa, nome_arquivo, status_lub
+    data_hora, tipo, subtipo, trecho, rpm_faixa, nome_arquivo, status_geral
 ):
   if "SUA_URL" in WEBHOOK_SHEETS_URL:
     return
@@ -296,7 +300,7 @@ def enviar_para_planilha(
       "data_hora": data_hora,
       "trecho": trecho,
       "arquivo": nome_arquivo,
-      "status": status_lub,
+      "status": status_geral,
       "obs": (
           f"Ativo: {tipo} ({subtipo}) | {rpm_faixa} | Horário Manaus (AMT)"
       ),
@@ -329,6 +333,121 @@ def isolar_envelope_rolamento(y, sr, lowcut, highcut, lp_env):
     envelope = sosfiltfilt(sos_lp, envelope)
 
   return sinal_isolado, envelope, low_efetivo, high_efetivo
+
+
+def analisar_espectro_envoltoria(fft_freqs, fft_mag, rpm_min, rpm_max):
+  """Lê o espectro de envoltória nas janelas 1x e 2x de BPFO, BPFI e BSF
+
+  e avalia se cada pista está íntegra ou apresenta sinal de início de falha.
+  """
+  fator_min = rpm_min / RPM_BASE_REFERENCIA
+  fator_max = rpm_max / RPM_BASE_REFERENCIA
+  resultados = {}
+
+  for codigo, freq_ref in FREQUENCIAS_FALHA_BASE.items():
+    f_low = freq_ref * fator_min
+    f_high = freq_ref * fator_max
+
+    # Janela fundamental (1x)
+    mask_1x = (fft_freqs >= f_low) & (fft_freqs <= f_high)
+    # Vizinhança local (excluindo 1x e 2x) para medir ruído de fundo real
+    margem = max(12.0, (f_high - f_low) * 1.5)
+    mask_viz = (
+        (fft_freqs >= max(5.0, f_low - margem))
+        & (fft_freqs <= f_high + margem)
+        & (~mask_1x)
+    )
+
+    ruido_fundo = (
+        float(np.median(fft_mag[mask_viz]))
+        if np.any(mask_viz)
+        else float(np.median(fft_mag[(fft_freqs >= 10) & (fft_freqs <= 350)]))
+    )
+    ruido_fundo = max(ruido_fundo, 1e-9)
+
+    if np.any(mask_1x):
+      freqs_1x = fft_freqs[mask_1x]
+      mags_1x = fft_mag[mask_1x]
+      idx_max_1x = int(np.argmax(mags_1x))
+      pico_1x = float(mags_1x[idx_max_1x])
+      freq_pico_1x = float(freqs_1x[idx_max_1x])
+      snr_1x = pico_1x / ruido_fundo
+    else:
+      pico_1x, freq_pico_1x, snr_1x = 0.0, (f_low + f_high) / 2.0, 0.0
+
+    # Janela harmônica (2x)
+    f2_low, f2_high = f_low * 2.0, f_high * 2.0
+    mask_2x = (fft_freqs >= f2_low) & (fft_freqs <= f2_high)
+    mask_viz_2x = (
+        (fft_freqs >= max(5.0, f2_low - margem))
+        & (fft_freqs <= f2_high + margem)
+        & (~mask_2x)
+    )
+    ruido_2x = (
+        float(np.median(fft_mag[mask_viz_2x]))
+        if np.any(mask_viz_2x)
+        else ruido_fundo
+    )
+    ruido_2x = max(ruido_2x, 1e-9)
+
+    if np.any(mask_2x):
+      freqs_2x = fft_freqs[mask_2x]
+      mags_2x = fft_mag[mask_2x]
+      idx_max_2x = int(np.argmax(mags_2x))
+      pico_2x = float(mags_2x[idx_max_2x])
+      freq_pico_2x = float(freqs_2x[idx_max_2x])
+      snr_2x = pico_2x / ruido_2x
+    else:
+      pico_2x, freq_pico_2x, snr_2x = 0.0, (f2_low + f2_high) / 2.0, 0.0
+
+    snr_max = max(snr_1x, snr_2x)
+    harmonico_dominante = "1x" if snr_1x >= snr_2x else "2x"
+    freq_dominante = freq_pico_1x if snr_1x >= snr_2x else freq_pico_2x
+    pico_dominante = pico_1x if snr_1x >= snr_2x else pico_2x
+
+    # Classificação de integridade da pista/componente
+    if snr_max >= 2.5:
+      suspeita_falha = True
+      status_pista = (
+          f"SINAL DE INÍCIO DE FALHA / PICO EXTERNO (Pico em"
+          f" {freq_dominante:.1f} Hz [{harmonico_dominante}], {snr_max:.1f}x"
+          " acima do ruído de fundo)."
+      )
+      detalhe_pista = (
+          "   • Leitura: Pico destacado detectado — pode ser início de falha"
+          " na pista ou pico vindo de outra fonte.\n"
+          "   • Ação obrigatória: Exige nova auscultação para confirmar se há"
+          " realmente falha."
+      )
+    else:
+      suspeita_falha = False
+      status_pista = (
+          f"ÍNTEGRA (Sem picos relevantes; máx. {snr_max:.1f}x do ruído de"
+          f" fundo em {freq_dominante:.1f} Hz)."
+      )
+      detalhe_pista = (
+          "   • Leitura: Pista íntegra, dentro do comportamento normal de"
+          " ruído de fundo."
+      )
+
+    resultados[codigo] = {
+        "f_low": f_low,
+        "f_high": f_high,
+        "pico_1x": pico_1x,
+        "freq_pico_1x": freq_pico_1x,
+        "snr_1x": snr_1x,
+        "pico_2x": pico_2x,
+        "freq_pico_2x": freq_pico_2x,
+        "snr_2x": snr_2x,
+        "snr_max": snr_max,
+        "freq_dominante": freq_dominante,
+        "pico_dominante": pico_dominante,
+        "suspeita_falha": suspeita_falha,
+        "status_pista": status_pista,
+        "detalhe_pista": detalhe_pista,
+    }
+
+  return resultados
 
 
 def aplicar_marca_vinci_figura(fig, logo_img, data_assinatura):
@@ -392,8 +511,10 @@ def processar_automatico(caminho_audio, trecho, perfil):
   fft_freqs = np.fft.rfftfreq(len(env_centered), d=1 / sr)
   fft_mag = (np.abs(fft_vals) * 2.0) / np.sum(janela)
 
-  fator_min = rpm_min / RPM_BASE_REFERENCIA
-  fator_max = rpm_max / RPM_BASE_REFERENCIA
+  # --- LEITURA REAL DO ESPECTRO DE ENVOLTÓRIA ---
+  analise_pistas = analisar_espectro_envoltoria(
+      fft_freqs, fft_mag, rpm_min, rpm_max
+  )
 
   # --- 1. GERAR GRÁFICOS (PÁGINA 1) ---
   fig_graficos = plt.figure(figsize=(12, 11.5))
@@ -438,12 +559,9 @@ def processar_automatico(caminho_audio, trecho, perfil):
       zorder=3,
   )
 
-  janelas_laudo = {}
-  for nome, freq_ref in FREQUENCIAS_FALHA_BASE.items():
-    cor = CORES_FALHA.get(nome, "black")
-    f_low = freq_ref * fator_min
-    f_high = freq_ref * fator_max
-    janelas_laudo[nome] = (f_low, f_high)
+  for codigo, info in analise_pistas.items():
+    cor = CORES_FALHA.get(codigo, "black")
+    f_low, f_high = info["f_low"], info["f_high"]
 
     ax3.axvspan(
         f_low,
@@ -451,7 +569,7 @@ def processar_automatico(caminho_audio, trecho, perfil):
         color=cor,
         alpha=0.16,
         zorder=1,
-        label=f"Região {nome} ({rpm_faixa_str})",
+        label=f"Região {codigo} ({rpm_faixa_str})",
     )
     ax3.axvline(
         x=f_high, color=cor, linestyle="--", linewidth=1.4, alpha=0.8, zorder=2
@@ -466,8 +584,28 @@ def processar_automatico(caminho_audio, trecho, perfil):
         zorder=2,
     )
 
+    # Destaca visualmente no gráfico se houve pico suspeito na faixa
+    if info["suspeita_falha"]:
+      ax3.scatter(
+          [info["freq_dominante"]],
+          [info["pico_dominante"]],
+          color=cor,
+          s=55,
+          zorder=5,
+          edgecolors="black",
+      )
+      ax3.annotate(
+          f"{codigo}: {info['freq_dominante']:.1f} Hz",
+          xy=(info["freq_dominante"], info["pico_dominante"]),
+          xytext=(4, 6),
+          textcoords="offset points",
+          fontsize=8,
+          fontweight="bold",
+          color=cor,
+      )
+
   ax3.set_title(
-      "3. Espectro de Envoltória (Zonas Sombreadas: Faixa"
+      "3. Espectro de Envoltória (Leitura Automática — Faixa"
       f" {rpm_faixa_str})"
   )
   ax3.set_xlabel("Frequência (Hz)")
@@ -481,7 +619,7 @@ def processar_automatico(caminho_audio, trecho, perfil):
   caminho_graficos = "relatorio_visual_graficos.png"
   plt.savefig(caminho_graficos, dpi=150, bbox_inches="tight")
 
-  # --- 2. DIAGNÓSTICO DE LUBRIFICAÇÃO E LAUDO ESCRITO (PÁGINA 2) ---
+  # --- 2. DIAGNÓSTICO DE PISTAS + LUBRIFICAÇÃO E LAUDO ESCRITO (PÁGINA 2) ---
   rms_env = np.sqrt(np.mean(envelope**2))
   pico_env = np.max(envelope)
   fator_crista = (pico_env / rms_env) if rms_env > 0 else 0.0
@@ -494,45 +632,89 @@ def processar_automatico(caminho_audio, trecho, perfil):
 
   baixa_lubrificacao = (fator_crista > 6.0) or (energia_lubrificacao > -32.0)
 
+  pistas_com_alerta = [
+      cod for cod, dados in analise_pistas.items() if dados["suspeita_falha"]
+  ]
+
+  # Parecer consolidado das pistas
+  if pistas_com_alerta:
+    lista_pistas = ", ".join(pistas_com_alerta)
+    parecer_pistas = (
+        f"ALERTA NAS PISTAS ({lista_pistas}): Detectado sinal de início de"
+        " falha ou pico vindo de outra fonte externa.\n"
+        "   -> EXIGÊNCIA TÉCNICA: O técnico DEVE realizar uma nova"
+        " auscultação para confirmar se há realmente uma falha."
+    )
+  else:
+    parecer_pistas = (
+        "PISTAS ÍNTEGRAS: Nenhuma assinatura de início de falha identificada"
+        " nas janelas BPFO, BPFI e BSF."
+    )
+
+  # Parecer consolidado de lubrificação
   if baixa_lubrificacao and aceita_lub:
     status_lub = (
-        "ALERTA: Baixa lubrificação detectada — deve ser feita a lubrificação e"
+        "Baixa lubrificação detectada — deve ser feita a lubrificação e"
         " realizar uma nova auscultação."
     )
     acao_lub_texto = (
-        "• ATENÇÃO: Baixa lubrificação identificada e este rolamento aceita"
-        " lubrificação.\n"
+        "• LUBRIFICAÇÃO: Baixa lubrificação detectada (rolamento aceita"
+        " lubrificação).\n"
         "   -> Deve ser feita a lubrificação e realizar uma nova auscultação."
     )
   elif baixa_lubrificacao and not aceita_lub:
     status_lub = (
-        "ALERTA: Impulsividade/atrito elevado (Rolamento não aceita"
-        " lubrificação)."
+        "Impulsividade/atrito elevado (Rolamento não aceita lubrificação)."
     )
     acao_lub_texto = (
-        "• ATENÇÃO: Sinal alterado detectado, porém este rolamento NÃO aceita"
-        " lubrificação.\n"
-        "   -> Acompanhar tendência e avaliar necessidade de intervenção"
-        " mecânica."
+        "• LUBRIFICAÇÃO: Atrito/impulsividade elevada, porém este rolamento"
+        " NÃO aceita lubrificação.\n"
+        "   -> Realizar nova auscultação de confirmação e acompanhar"
+        " evolução."
     )
   elif aceita_lub:
-    status_lub = "SAUDÁVEL: Lubrificação e sinal estáveis (Aceita lubrificação)."
+    status_lub = "Lubrificação estável (Aceita lubrificação)."
     acao_lub_texto = (
-        "• Rolamento aceita lubrificação; sem indicativo de baixa"
-        " lubrificação no momento."
+        "• LUBRIFICAÇÃO: Sem indicativo de baixa lubrificação no momento"
+        " (rolamento aceita lubrificação)."
     )
   else:
-    status_lub = (
-        "SAUDÁVEL: Sinal estável na faixa de operação (Não aceita"
-        " lubrificação)."
+    status_lub = "Lubrificação/atrito estável (Não aceita lubrificação)."
+    acao_lub_texto = "• LUBRIFICAÇÃO: Rolamento selado / não aceita lubrificação."
+
+  # Status resumido para tela e planilha
+  if pistas_com_alerta and (baixa_lubrificacao and aceita_lub):
+    status_geral = (
+        f"ALERTA ({', '.join(pistas_com_alerta)} + Baixa Lubrificação): Pode"
+        " ser início de falha ou pico externo; lubrificar e realizar nova"
+        " auscultação."
     )
-    acao_lub_texto = "• Rolamento selado / não aceita lubrificação."
+  elif pistas_com_alerta:
+    status_geral = (
+        f"ALERTA ({', '.join(pistas_com_alerta)}): Pode ser início de falha ou"
+        " pico de outra fonte — EXIGIDA nova auscultação para confirmação."
+    )
+  elif baixa_lubrificacao and aceita_lub:
+    status_geral = (
+        "PISTAS ÍNTEGRAS | ALERTA LUBRIFICAÇÃO: Deve ser feita a lubrificação"
+        " e realizar uma nova auscultação."
+    )
+  elif baixa_lubrificacao:
+    status_geral = (
+        "PISTAS ÍNTEGRAS | ATENÇÃO ATRITO: Impulsividade elevada (não aceita"
+        " lubrificação) — realizar nova auscultação."
+    )
+  else:
+    status_geral = (
+        "SAUDÁVEL: Pistas íntegras e sem sinais de início de falha ou baixa"
+        " lubrificação."
+    )
 
-  bpfo_min, bpfo_max = janelas_laudo["BPFO"]
-  bpfi_min, bpfi_max = janelas_laudo["BPFI"]
-  bsf_min, bsf_max = janelas_laudo["BSF"]
+  bpfo = analise_pistas["BPFO"]
+  bpfi = analise_pistas["BPFI"]
+  bsf = analise_pistas["BSF"]
 
-  fig_laudo, ax_laudo = plt.subplots(figsize=(10, 11.5))
+  fig_laudo, ax_laudo = plt.subplots(figsize=(10, 12.0))
   ax_laudo.axis("off")
 
   selo_texto = "" if logo_vinci is not None else "[ VINCI AIRPORTS ]\n"
@@ -546,39 +728,46 @@ def processar_automatico(caminho_audio, trecho, perfil):
       f"Identificação do Trecho / Tag: {trecho}\n"
       f"Arquivo de Áudio: {nome_arquivo}\n"
       f"Data e Hora da Emissão: {data_assinatura}\n"
-      f"Faixa de Rotação do Ativo: {rpm_faixa_str}\n"
-      f"Aceita Lubrificação: {'Sim' if aceita_lub else 'Não'}\n"
+      f"Faixa de Rotação do Ativo: {rpm_faixa_str} | Aceita Lubrificação:"
+      f" {'Sim' if aceita_lub else 'Não'}\n"
       f"Banda Isolada: {low_ef:.0f} Hz a {high_ef:.0f} Hz | Fator de Crista:"
       f" {fator_crista:.2f}\n\n"
       "------------------------------------------------------------------------\n"
-      "1. DIAGNÓSTICO DETALHADO POR COMPONENTE / FAIXA DE FALHA:\n"
+      "1. LEITURA AUTOMÁTICA DO ESPECTRO DE ENVOLTÓRIA (INTEGRIDADE DAS PISTAS):\n"
       "------------------------------------------------------------------------\n"
-      f"🔴 PISTA EXTERNA (BPFO) - Janela ({rpm_faixa_str}): {bpfo_min:.2f} Hz"
-      f" a {bpfo_max:.2f} Hz\n"
-      "   • Status: Verificar pico no espectro de envoltória (1x e 2x).\n\n"
-      f"🔵 PISTA INTERNA (BPFI) - Janela ({rpm_faixa_str}): {bpfi_min:.2f} Hz"
-      f" a {bpfi_max:.2f} Hz\n"
-      "   • Status: Verificar pico no espectro de envoltória (1x e 2x).\n\n"
-      f"🟢 ELEMENTOS ROLANTES (BSF) - Janela ({rpm_faixa_str}): {bsf_min:.2f}"
-      f" Hz a {bsf_max:.2f} Hz\n"
-      "   • Status: Verificar pico no espectro de envoltória (1x e 2x).\n\n"
+      f"🔴 PISTA EXTERNA (BPFO) [{bpfo['f_low']:.2f} a {bpfo['f_high']:.2f} Hz]:\n"
+      f"   • Status: {bpfo['status_pista']}\n"
+      f"{bpfo['detalhe_pista']}\n\n"
+      f"🔵 PISTA INTERNA (BPFI) [{bpfi['f_low']:.2f} a {bpfi['f_high']:.2f} Hz]:\n"
+      f"   • Status: {bpfi['status_pista']}\n"
+      f"{bpfi['detalhe_pista']}\n\n"
+      f"🟢 ELEMENTOS ROLANTES (BSF) [{bsf['f_low']:.2f} a {bsf['f_high']:.2f} Hz]:\n"
+      f"   • Status: {bsf['status_pista']}\n"
+      f"{bsf['detalhe_pista']}\n\n"
       "------------------------------------------------------------------------\n"
-      "2. DIAGNÓSTICO FINAL E CONDIÇÃO DE LUBRIFICAÇÃO:\n"
+      "2. DIAGNÓSTICO FINAL (PISTAS E LUBRIFICAÇÃO):\n"
       "------------------------------------------------------------------------\n"
-      f"⚠️ CONDIÇÃO GERAL: {status_lub}\n"
+      f"• INTEGRIDADE: {parecer_pistas}\n"
       f"{acao_lub_texto}\n\n"
       "------------------------------------------------------------------------\n"
-      "3. RECOMENDAÇÃO TÉCNICA DE MANUTENÇÃO:\n"
+      "3. EXIGÊNCIA / RECOMENDAÇÃO TÉCNICA DE CAMPO:\n"
       "------------------------------------------------------------------------\n"
-      f"   • Avaliar picos nas zonas sombreadas para {rpm_faixa_str}.\n"
-      "   • Registrar histórico e reavaliar conforme plano de manutenção.\n"
+      + (
+          "   • EXIGÊNCIA: Realizar NOVA AUSCULTAÇÃO posicionando o sensor"
+          " firme\n"
+          "     no mancal para confirmar se o pico é falha real ou fonte"
+          " externa.\n"
+          if (pistas_com_alerta or baixa_lubrificacao)
+          else "   • Manter rotina periódica de inspeção preditiva.\n"
+      )
+      + "   • Registrar resultado na planilha de controle operacional.\n"
       "========================================================================"
   )
   ax_laudo.text(
       0.01,
-      0.92,
+      0.93,
       texto_laudo,
-      fontsize=9.8,
+      fontsize=9.3,
       family="monospace",
       verticalalignment="top",
       horizontalalignment="left",
@@ -607,9 +796,9 @@ def processar_automatico(caminho_audio, trecho, perfil):
       trecho,
       rpm_faixa_str,
       nome_arquivo,
-      status_lub,
+      status_geral,
   )
-  return caminho_pdf_unificado, status_lub, data_assinatura
+  return caminho_pdf_unificado, status_geral, data_assinatura
 
 
 if uploaded_file is not None:
@@ -625,8 +814,8 @@ if uploaded_file is not None:
       )
     else:
       with st.spinner(
-          f"Processando {trecho_selecionado} ({perfil_ativo['rpm_min']} a"
-          f" {perfil_ativo['rpm_max']} RPM) no horário de Manaus..."
+          f"Lendo espectro de envoltória de {trecho_selecionado}"
+          f" ({perfil_ativo['rpm_min']} a {perfil_ativo['rpm_max']} RPM)..."
       ):
         pdf_gerado, status, emissao_str = processar_automatico(
             caminho_temp, trecho_selecionado, perfil_ativo

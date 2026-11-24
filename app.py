@@ -5,7 +5,6 @@ import librosa
 import librosa.display
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
-from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 import numpy as np
 from PIL import Image
 import requests
@@ -15,7 +14,7 @@ import streamlit as st
 # --- URL DO SEU WEBHOOK DO GOOGLE SHEETS PESSOAL ---
 WEBHOOK_SHEETS_URL = "SUA_URL_DO_GOOGLE_APPS_SCRIPT_AQUI"
 
-# Caminho opcional para o logotipo da VINCI no seu repositório GitHub
+# Caminho opcional para o logotipo da VINCI no repositório GitHub
 LOGO_VINCI_PATH = "vinci_logo.png"
 
 # Fuso horário oficial de Manaus (UTC-4)
@@ -27,7 +26,7 @@ st.set_page_config(
     layout="centered",
 )
 
-# --- ESTILO VISUAL AEROPORTUÁRIO PROFISSIONAL ---
+# --- ESTILO VISUAL AEROPORTUÁRIO + TRAVA DE CAIXA ALTA NA DIGITAÇÃO ---
 st.markdown(
     """
     <style>
@@ -63,6 +62,12 @@ st.markdown(
             margin-top: 6px;
             margin-bottom: 0;
         }
+        /* Força visualização em letras maiúsculas enquanto o usuário digita */
+        div[data-testid="stTextInput"] input {
+            text-transform: uppercase !important;
+            font-weight: 700;
+            letter-spacing: 0.8px;
+        }
         .stButton > button {
             width: 100%;
             background-color: #0284c7;
@@ -80,6 +85,104 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# --- CADASTRO DE ATIVOS / TAGS POR SUBTIPO DE BOMBA ---
+CADASTRO_BOMBAS = {
+    **{
+        tag: {
+            "tipo": "Bomba",
+            "subtipo": "Água Gelada Secundária",
+            "rpm_min": 2900,
+            "rpm_max": 3100,
+            "rpm_nominal": 3000,
+            "aceita_lubrificacao": True,
+            "lowcut": 2500,
+            "highcut": 8000,
+            "lp_env": 500,
+        }
+        for tag in [
+            "MAOMBOM056",
+            "MAOMBOM057",
+            "MAOMBOM058",
+            "MAOMBOM059",
+            "MAOMBOM060",
+            "MAOMBOM061",
+        ]
+    },
+    **{
+        tag: {
+            "tipo": "Bomba",
+            "subtipo": "Água Gelada Primária",
+            "rpm_min": 1650,
+            "rpm_max": 1750,
+            "rpm_nominal": 1700,
+            "aceita_lubrificacao": False,
+            "lowcut": 2500,
+            "highcut": 8000,
+            "lp_env": 500,
+        }
+        for tag in [
+            "MAOMBOM001",
+            "MAOMBOM002",
+            "MAOMBOM003",
+            "MAOMBOM009",
+            "MAOMBOM010",
+            "MAOMBOM029",
+            "MAOMBOM030",
+            "MAOMBOM031",
+        ]
+    },
+    **{
+        tag: {
+            "tipo": "Bomba",
+            "subtipo": "Água Condensada",
+            "rpm_min": 1500,
+            "rpm_max": 1650,
+            "rpm_nominal": 1575,
+            "aceita_lubrificacao": True,
+            "lowcut": 2500,
+            "highcut": 8000,
+            "lp_env": 500,
+        }
+        for tag in [
+            "MAOMBOM004",
+            "MAOMBOM005",
+            "MAOMBOM006",
+            "MAOMBOM007",
+            "MAOMBOM008",
+            "MAOMBOM015",
+            "MAOMBOM016",
+            "MAOMBOM017",
+        ]
+    },
+}
+
+CONFIG_PADRAO_OUTROS = {
+    "Bomba": {
+        "subtipo": "Não Especificado",
+        "rpm_min": 1500,
+        "rpm_max": 1750,
+        "rpm_nominal": 1750,
+        "aceita_lubrificacao": True,
+        "lowcut": 2500,
+        "highcut": 8000,
+        "lp_env": 500,
+    },
+    "Moto Redutor": {
+        "subtipo": "Moto Redutor",
+        "rpm_min": 1500,
+        "rpm_max": 1750,
+        "rpm_nominal": 1750,
+        "aceita_lubrificacao": True,
+        "lowcut": 3000,
+        "highcut": 9500,
+        "lp_env": 500,
+    },
+}
+
+RPM_BASE_REFERENCIA = 1750.0
+FREQUENCIAS_FALHA_BASE = {"BPFO": 83.0, "BPFI": 128.4, "BSF": 53.1}
+CORES_FALHA = {"BPFO": "red", "BPFI": "blue", "BSF": "green"}
+
 
 def obter_agora_manaus():
   return datetime.now(TZ_MANAUS)
@@ -92,6 +195,21 @@ def carregar_logo_vinci():
     except Exception:
       return None
   return None
+
+
+def obter_perfil_ativo(trecho, tipo_selecionado):
+  if trecho in CADASTRO_BOMBAS:
+    perfil = dict(CADASTRO_BOMBAS[trecho])
+    perfil["cadastrado"] = True
+    return perfil
+  perfil = dict(
+      CONFIG_PADRAO_OUTROS.get(
+          tipo_selecionado, CONFIG_PADRAO_OUTROS["Bomba"]
+      )
+  )
+  perfil["tipo"] = tipo_selecionado
+  perfil["cadastrado"] = False
+  return perfil
 
 
 logo_vinci = carregar_logo_vinci()
@@ -118,7 +236,7 @@ with col_header:
       <div class="aero-banner" style="margin-bottom:0;">
           <div class="aero-tag">✈️ MANAUS • OPERAÇÃO AEROPORTUÁRIA • MANUTENÇÃO PREDITIVA</div>
           <div class="aero-title">Análise Acústica de Rolamentos</div>
-          <div class="aero-sub">Isolamento de sinal, diagnóstico por faixa de RPM e emissão de relatório técnico.</div>
+          <div class="aero-sub">Rotação automática por tag, isolamento de sinal e emissão de laudo técnico.</div>
       </div>
       """,
       unsafe_allow_html=True,
@@ -126,21 +244,41 @@ with col_header:
 
 st.write("")
 
-# --- 1. TIPO DE ATIVO (BOMBA OU MOTO REDUTOR) ---
-tipo_ativo = st.radio(
+# --- 1. CÓDIGO DO TRECHO / TAG (TRAVADO EM MAIÚSCULAS) ---
+trecho_input = st.text_input(
+    "📍 Código do Trecho / Tag (Apenas letras maiúsculas — Ex: MAOMBOM061):",
+    value="",
+    max_chars=10,
+    placeholder="EX: MAOMBOM061",
+)
+trecho_selecionado = trecho_input.upper().strip()
+
+# --- 2. TIPO DE ATIVO ---
+tipo_ativo_manual = st.radio(
     "⚙️ Tipo de Equipamento:",
     options=["Bomba", "Moto Redutor"],
     horizontal=True,
 )
 
-# --- 2. CÓDIGO DO TRECHO (FORÇA MAIÚSCULAS) ---
-trecho_input = st.text_input(
-    "📍 Código do Trecho (Ex: MAOAAAA123):",
-    value="",
-    max_chars=10,
-    placeholder="Ex: MAOESLP054",
-)
-trecho_selecionado = trecho_input.upper().strip()
+perfil_ativo = obter_perfil_ativo(trecho_selecionado, tipo_ativo_manual)
+tipo_ativo = perfil_ativo["tipo"]
+
+if trecho_selecionado:
+  lub_texto = (
+      "Aceita lubrificação"
+      if perfil_ativo["aceita_lubrificacao"]
+      else "Não aceita lubrificação"
+  )
+  origem_tag = (
+      "Tag cadastrada"
+      if perfil_ativo["cadastrado"]
+      else "Tag não cadastrada (usando faixa padrão)"
+  )
+  st.info(
+      f"**Ativo:** {tipo_ativo} ({perfil_ativo['subtipo']}) • **Faixa de"
+      f" Rotação:** {perfil_ativo['rpm_min']} a {perfil_ativo['rpm_max']} RPM"
+      f" • **Lubrificação:** {lub_texto}\n\n*{origem_tag}*"
+  )
 
 # --- 3. UPLOAD DE ÁUDIO (INCLUINDO MPEG) ---
 uploaded_file = st.file_uploader(
@@ -148,13 +286,10 @@ uploaded_file = st.file_uploader(
     type=["mp3", "wav", "mpeg"],
 )
 
-CONFIG_ATIVOS = {
-    "Bomba": {"lowcut": 2500, "highcut": 8000, "lp_env": 500},
-    "Moto Redutor": {"lowcut": 3000, "highcut": 9500, "lp_env": 500},
-}
 
-
-def enviar_para_planilha(data_hora, tipo, trecho, nome_arquivo, status_lub):
+def enviar_para_planilha(
+    data_hora, tipo, subtipo, trecho, rpm_faixa, nome_arquivo, status_lub
+):
   if "SUA_URL" in WEBHOOK_SHEETS_URL:
     return
   payload = {
@@ -162,7 +297,9 @@ def enviar_para_planilha(data_hora, tipo, trecho, nome_arquivo, status_lub):
       "trecho": trecho,
       "arquivo": nome_arquivo,
       "status": status_lub,
-      "obs": f"Ativo: {tipo} | Horário Manaus (AMT) | Relatório VINCI",
+      "obs": (
+          f"Ativo: {tipo} ({subtipo}) | {rpm_faixa} | Horário Manaus (AMT)"
+      ),
   }
   try:
     requests.post(WEBHOOK_SHEETS_URL, json=payload, timeout=5)
@@ -195,8 +332,6 @@ def isolar_envelope_rolamento(y, sr, lowcut, highcut, lp_env):
 
 
 def aplicar_marca_vinci_figura(fig, logo_img, data_assinatura):
-  """Adiciona cabeçalho/marca VINCI no topo da figura do relatório."""
-  # Faixa superior discreta estilo briefing operacional aeroportuário
   header_ax = fig.add_axes([0.0, 0.965, 1.0, 0.035])
   header_ax.set_facecolor("#0a1f3d")
   header_ax.set_xticks([])
@@ -230,15 +365,21 @@ def aplicar_marca_vinci_figura(fig, logo_img, data_assinatura):
     logo_ax.imshow(logo_img)
 
 
-def processar_automatico(caminho_audio, tipo, trecho):
+def processar_automatico(caminho_audio, trecho, perfil):
   nome_arquivo = os.path.basename(caminho_audio)
   agora_manaus = obter_agora_manaus()
   data_assinatura = agora_manaus.strftime("%d/%m/%Y às %H:%M:%S (Manaus)")
 
-  cfg = CONFIG_ATIVOS.get(tipo, CONFIG_ATIVOS["Bomba"])
+  tipo = perfil["tipo"]
+  subtipo = perfil["subtipo"]
+  rpm_min = perfil["rpm_min"]
+  rpm_max = perfil["rpm_max"]
+  rpm_faixa_str = f"{rpm_min} a {rpm_max} RPM"
+  aceita_lub = perfil["aceita_lubrificacao"]
+
   y, sr = librosa.load(caminho_audio, sr=None)
   sinal_isolado, envelope, low_ef, high_ef = isolar_envelope_rolamento(
-      y, sr, cfg["lowcut"], cfg["highcut"], cfg["lp_env"]
+      y, sr, perfil["lowcut"], perfil["highcut"], perfil["lp_env"]
   )
 
   n_fft = 2048
@@ -251,12 +392,15 @@ def processar_automatico(caminho_audio, tipo, trecho):
   fft_freqs = np.fft.rfftfreq(len(env_centered), d=1 / sr)
   fft_mag = (np.abs(fft_vals) * 2.0) / np.sum(janela)
 
+  fator_min = rpm_min / RPM_BASE_REFERENCIA
+  fator_max = rpm_max / RPM_BASE_REFERENCIA
+
   # --- 1. GERAR GRÁFICOS (PÁGINA 1) ---
   fig_graficos = plt.figure(figsize=(12, 11.5))
   plt.suptitle(
-      f"ANÁLISE ISOLADA DE ROLAMENTO ({tipo.upper()}) - TRECHO:"
-      f" {trecho}\nArquivo: {nome_arquivo}",
-      fontsize=12.5,
+      f"ANÁLISE ISOLADA DE ROLAMENTO ({tipo.upper()} - {subtipo.upper()}) |"
+      f" TRECHO: {trecho}\nRotação: {rpm_faixa_str} | Arquivo: {nome_arquivo}",
+      fontsize=12,
       fontweight="bold",
       color="#0a1f3d",
       y=0.945,
@@ -294,44 +438,50 @@ def processar_automatico(caminho_audio, tipo, trecho):
       zorder=3,
   )
 
-  frequencias_falha = {"BPFO": 83.0, "BPFI": 128.4, "BSF": 53.1}
-  cores = {"BPFO": "red", "BPFI": "blue", "BSF": "green"}
-  fator_min = 1500 / 1750
+  janelas_laudo = {}
+  for nome, freq_ref in FREQUENCIAS_FALHA_BASE.items():
+    cor = CORES_FALHA.get(nome, "black")
+    f_low = freq_ref * fator_min
+    f_high = freq_ref * fator_max
+    janelas_laudo[nome] = (f_low, f_high)
 
-  for nome, freq_ref in frequencias_falha.items():
-    cor = cores.get(nome, "black")
-    freq_min = freq_ref * fator_min
     ax3.axvspan(
-        freq_min,
-        freq_ref,
+        f_low,
+        f_high,
         color=cor,
-        alpha=0.15,
+        alpha=0.16,
         zorder=1,
-        label=f"Região {nome} (1500-1750 RPM)",
+        label=f"Região {nome} ({rpm_faixa_str})",
     )
     ax3.axvline(
-        x=freq_ref, color=cor, linestyle="--", linewidth=1.5, alpha=0.8, zorder=2
+        x=f_high, color=cor, linestyle="--", linewidth=1.4, alpha=0.8, zorder=2
     )
-    ax3.axvspan(freq_min * 2, freq_ref * 2, color=cor, alpha=0.07, zorder=1)
+    ax3.axvspan(f_low * 2, f_high * 2, color=cor, alpha=0.07, zorder=1)
     ax3.axvline(
-        x=freq_ref * 2, color=cor, linestyle=":", alpha=0.5, linewidth=1, zorder=2
+        x=f_high * 2,
+        color=cor,
+        linestyle=":",
+        alpha=0.5,
+        linewidth=1,
+        zorder=2,
     )
 
   ax3.set_title(
-      "3. Espectro de Envoltória (Zonas Sombreadas: Margem 1500-1750 RPM)"
+      "3. Espectro de Envoltória (Zonas Sombreadas: Faixa"
+      f" {rpm_faixa_str})"
   )
   ax3.set_xlabel("Frequência (Hz)")
   ax3.set_ylabel("Amplitude")
-  ax3.set_xlim(0, 300)
+  ax3.set_xlim(0, 350)
   ax3.grid(True, linestyle="--", alpha=0.6)
-  ax3.legend(loc="upper right", framealpha=0.92, fontsize=9)
+  ax3.legend(loc="upper right", framealpha=0.92, fontsize=8.5)
 
   plt.tight_layout(rect=[0, 0, 1, 0.89])
   aplicar_marca_vinci_figura(fig_graficos, logo_vinci, data_assinatura)
   caminho_graficos = "relatorio_visual_graficos.png"
   plt.savefig(caminho_graficos, dpi=150, bbox_inches="tight")
 
-  # --- 2. DIAGNÓSTICO E LAUDO ESCRITO (PÁGINA 2) ---
+  # --- 2. DIAGNÓSTICO DE LUBRIFICAÇÃO E LAUDO ESCRITO (PÁGINA 2) ---
   rms_env = np.sqrt(np.mean(envelope**2))
   pico_env = np.max(envelope)
   fator_crista = (pico_env / rms_env) if rms_env > 0 else 0.0
@@ -342,12 +492,45 @@ def processar_automatico(caminho_audio, tipo, trecho):
       np.mean(S_db[idx_lub, :]) if len(idx_lub) > 0 else -100
   )
 
-  if fator_crista > 6.0 or energia_lubrificacao > -32.0:
+  baixa_lubrificacao = (fator_crista > 6.0) or (energia_lubrificacao > -32.0)
+
+  if baixa_lubrificacao and aceita_lub:
     status_lub = (
-        f"ALERTA: Impulsividade/atrito elevado ({tipo} - banda isolada)."
+        "ALERTA: Baixa lubrificação detectada — deve ser feita a lubrificação e"
+        " realizar uma nova auscultação."
+    )
+    acao_lub_texto = (
+        "• ATENÇÃO: Baixa lubrificação identificada e este rolamento aceita"
+        " lubrificação.\n"
+        "   -> Deve ser feita a lubrificação e realizar uma nova auscultação."
+    )
+  elif baixa_lubrificacao and not aceita_lub:
+    status_lub = (
+        "ALERTA: Impulsividade/atrito elevado (Rolamento não aceita"
+        " lubrificação)."
+    )
+    acao_lub_texto = (
+        "• ATENÇÃO: Sinal alterado detectado, porém este rolamento NÃO aceita"
+        " lubrificação.\n"
+        "   -> Acompanhar tendência e avaliar necessidade de intervenção"
+        " mecânica."
+    )
+  elif aceita_lub:
+    status_lub = "SAUDÁVEL: Lubrificação e sinal estáveis (Aceita lubrificação)."
+    acao_lub_texto = (
+        "• Rolamento aceita lubrificação; sem indicativo de baixa"
+        " lubrificação no momento."
     )
   else:
-    status_lub = f"SAUDÁVEL: Comportamento estável ({tipo} - banda isolada)."
+    status_lub = (
+        "SAUDÁVEL: Sinal estável na faixa de operação (Não aceita"
+        " lubrificação)."
+    )
+    acao_lub_texto = "• Rolamento selado / não aceita lubrificação."
+
+  bpfo_min, bpfo_max = janelas_laudo["BPFO"]
+  bpfi_min, bpfi_max = janelas_laudo["BPFI"]
+  bsf_min, bsf_max = janelas_laudo["BSF"]
 
   fig_laudo, ax_laudo = plt.subplots(figsize=(10, 11.5))
   ax_laudo.axis("off")
@@ -359,31 +542,35 @@ def processar_automatico(caminho_audio, tipo, trecho):
       " AEROPORTUÁRIA     \n"
       "========================================================================\n\n"
       f"Unidade / Localidade: Aeroporto de Manaus (MAO) — Horário Local AMT\n"
-      f"Tipo de Ativo: {tipo}\n"
-      f"Identificação do Trecho: {trecho}\n"
+      f"Tipo de Ativo: {tipo} — {subtipo}\n"
+      f"Identificação do Trecho / Tag: {trecho}\n"
       f"Arquivo de Áudio: {nome_arquivo}\n"
       f"Data e Hora da Emissão: {data_assinatura}\n"
+      f"Faixa de Rotação do Ativo: {rpm_faixa_str}\n"
+      f"Aceita Lubrificação: {'Sim' if aceita_lub else 'Não'}\n"
       f"Banda Isolada: {low_ef:.0f} Hz a {high_ef:.0f} Hz | Fator de Crista:"
-      f" {fator_crista:.2f}\n"
-      "Parâmetro Operacional Alvo: Faixa dinâmica variável de 1500 a 1750 RPM\n\n"
+      f" {fator_crista:.2f}\n\n"
       "------------------------------------------------------------------------\n"
       "1. DIAGNÓSTICO DETALHADO POR COMPONENTE / FAIXA DE FALHA:\n"
       "------------------------------------------------------------------------\n"
-      "🔴 PISTA EXTERNA (BPFO) - Janela: 71.10 Hz a 83.00 Hz\n"
+      f"🔴 PISTA EXTERNA (BPFO) - Janela ({rpm_faixa_str}): {bpfo_min:.2f} Hz"
+      f" a {bpfo_max:.2f} Hz\n"
       "   • Status: Verificar pico no espectro de envoltória (1x e 2x).\n\n"
-      "🔵 PISTA INTERNA (BPFI) - Janela: 110.00 Hz a 128.40 Hz\n"
+      f"🔵 PISTA INTERNA (BPFI) - Janela ({rpm_faixa_str}): {bpfi_min:.2f} Hz"
+      f" a {bpfi_max:.2f} Hz\n"
       "   • Status: Verificar pico no espectro de envoltória (1x e 2x).\n\n"
-      "🟢 ELEMENTOS ROLANTES (BSF) - Janela: 45.50 Hz a 53.10 Hz\n"
+      f"🟢 ELEMENTOS ROLANTES (BSF) - Janela ({rpm_faixa_str}): {bsf_min:.2f}"
+      f" Hz a {bsf_max:.2f} Hz\n"
       "   • Status: Verificar pico no espectro de envoltória (1x e 2x).\n\n"
       "------------------------------------------------------------------------\n"
-      "2. DIAGNÓSTICO FINAL DA CONDIÇÃO DO ATIVO:\n"
+      "2. DIAGNÓSTICO FINAL E CONDIÇÃO DE LUBRIFICAÇÃO:\n"
       "------------------------------------------------------------------------\n"
       f"⚠️ CONDIÇÃO GERAL: {status_lub}\n"
-      "   • Filtro aplicado conforme o tipo de ativo selecionado.\n\n"
+      f"{acao_lub_texto}\n\n"
       "------------------------------------------------------------------------\n"
       "3. RECOMENDAÇÃO TÉCNICA DE MANUTENÇÃO:\n"
       "------------------------------------------------------------------------\n"
-      "   • Comparar picos nas regiões sombreadas (1500-1750 RPM).\n"
+      f"   • Avaliar picos nas zonas sombreadas para {rpm_faixa_str}.\n"
       "   • Registrar histórico e reavaliar conforme plano de manutenção.\n"
       "========================================================================"
   )
@@ -391,7 +578,7 @@ def processar_automatico(caminho_audio, tipo, trecho):
       0.01,
       0.92,
       texto_laudo,
-      fontsize=10,
+      fontsize=9.8,
       family="monospace",
       verticalalignment="top",
       horizontalalignment="left",
@@ -413,7 +600,15 @@ def processar_automatico(caminho_audio, tipo, trecho):
   plt.close(fig_graficos)
   plt.close(fig_laudo)
 
-  enviar_para_planilha(data_assinatura, tipo, trecho, nome_arquivo, status_lub)
+  enviar_para_planilha(
+      data_assinatura,
+      tipo,
+      subtipo,
+      trecho,
+      rpm_faixa_str,
+      nome_arquivo,
+      status_lub,
+  )
   return caminho_pdf_unificado, status_lub, data_assinatura
 
 
@@ -425,22 +620,24 @@ if uploaded_file is not None:
   if st.button("🚀 Gerar Relatório Técnico"):
     if not trecho_selecionado:
       st.error(
-          "⚠️ Por favor, preencha o código do trecho antes de gerar o"
+          "⚠️ Por favor, preencha o código do trecho / tag antes de gerar o"
           " relatório."
       )
     else:
       with st.spinner(
-          "Processando áudio no horário de Manaus e gerando relatório"
-          " VINCI..."
+          f"Processando {trecho_selecionado} ({perfil_ativo['rpm_min']} a"
+          f" {perfil_ativo['rpm_max']} RPM) no horário de Manaus..."
       ):
         pdf_gerado, status, emissao_str = processar_automatico(
-            caminho_temp, tipo_ativo, trecho_selecionado
+            caminho_temp, trecho_selecionado, perfil_ativo
         )
 
       st.success("✅ Relatório emitido e registrado com sucesso!")
       st.info(
-          f"**Ativo:** {tipo_ativo} | **Trecho:** `{trecho_selecionado}`\n\n"
-          f"**Emissão:** {emissao_str}\n\n"
+          f"**Ativo:** {tipo_ativo} ({perfil_ativo['subtipo']}) | **Trecho:**"
+          f" `{trecho_selecionado}`\n\n"
+          f"**Rotação:** {perfil_ativo['rpm_min']} a"
+          f" {perfil_ativo['rpm_max']} RPM | **Emissão:** {emissao_str}\n\n"
           f"**Diagnóstico:** {status}"
       )
 

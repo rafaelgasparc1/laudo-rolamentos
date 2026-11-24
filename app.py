@@ -1,14 +1,16 @@
 from datetime import datetime
 import os
+import textwrap
 from zoneinfo import ZoneInfo
 import librosa
 import librosa.display
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.patches import FancyBboxPatch
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 import requests
-from scipy.signal import butter, hilbert, sosfiltfilt
+from scipy.signal import butter, hilbert, sosfiltfilt, welch
 import streamlit as st
 
 # --- URL DO SEU WEBHOOK DO GOOGLE SHEETS PESSOAL ---
@@ -181,11 +183,11 @@ CONFIG_PADRAO_OUTROS = {
 RPM_BASE_REFERENCIA = 1750.0
 FREQUENCIAS_FALHA_BASE = {"BPFO": 83.0, "BPFI": 128.4, "BSF": 53.1}
 NOMES_COMPONENTES = {
-    "BPFO": "PISTA EXTERNA (BPFO)",
-    "BPFI": "PISTA INTERNA (BPFI)",
-    "BSF": "ELEMENTOS ROLANTES (BSF)",
+    "BPFO": "Pista Externa (BPFO)",
+    "BPFI": "Pista Interna (BPFI)",
+    "BSF": "Elementos Rolantes (BSF)",
 }
-CORES_FALHA = {"BPFO": "red", "BPFI": "blue", "BSF": "green"}
+CORES_FALHA = {"BPFO": "#dc2626", "BPFI": "#2563eb", "BSF": "#16a34a"}
 
 
 def obter_agora_manaus():
@@ -218,7 +220,7 @@ def obter_perfil_ativo(trecho, tipo_selecionado):
 
 logo_vinci = carregar_logo_vinci()
 
-# --- CABEÇALHO COM MARCA VINCI E TEMA AEROPORTUÁRIO ---
+# --- CABEÇALHO WEB COM MARCA VINCI E TEMA AEROPORTUÁRIO ---
 col_logo, col_header = st.columns([1, 3.2], vertical_alignment="center")
 with col_logo:
   if logo_vinci is not None:
@@ -240,7 +242,7 @@ with col_header:
       <div class="aero-banner" style="margin-bottom:0;">
           <div class="aero-tag">✈️ MANAUS • OPERAÇÃO AEROPORTUÁRIA • MANUTENÇÃO PREDITIVA</div>
           <div class="aero-title">Análise Acústica de Rolamentos</div>
-          <div class="aero-sub">Leitura espectral de envoltória, rotação por tag e emissão de laudo técnico.</div>
+          <div class="aero-sub">Envoltória por Welch (Mediana), rotação por tag e emissão de laudo técnico.</div>
       </div>
       """,
       unsafe_allow_html=True,
@@ -302,7 +304,8 @@ def enviar_para_planilha(
       "arquivo": nome_arquivo,
       "status": status_geral,
       "obs": (
-          f"Ativo: {tipo} ({subtipo}) | {rpm_faixa} | Horário Manaus (AMT)"
+          f"Ativo: {tipo} ({subtipo}) | {rpm_faixa} | Welch Mediana | Horário"
+          " Manaus (AMT)"
       ),
   }
   try:
@@ -335,11 +338,26 @@ def isolar_envelope_rolamento(y, sr, lowcut, highcut, lp_env):
   return sinal_isolado, envelope, low_efetivo, high_efetivo
 
 
-def analisar_espectro_envoltoria(fft_freqs, fft_mag, rpm_min, rpm_max):
-  """Lê o espectro de envoltória nas janelas 1x e 2x de BPFO, BPFI e BSF
+def calcular_espectro_welch_mediana(envelope, sr):
+  env_centered = envelope - np.mean(envelope)
+  nperseg = min(len(env_centered), int(sr * 2.0))
+  nperseg = max(256, nperseg)
+  noverlap = nperseg // 2
 
-  e avalia se cada pista está íntegra ou apresenta sinal de início de falha.
-  """
+  freqs, pxx = welch(
+      env_centered,
+      fs=sr,
+      window="hann",
+      nperseg=nperseg,
+      noverlap=noverlap,
+      scaling="spectrum",
+      average="median",
+  )
+  mag = np.sqrt(np.maximum(pxx, 0.0))
+  return freqs, mag
+
+
+def analisar_espectro_envoltoria(fft_freqs, fft_mag, rpm_min, rpm_max):
   fator_min = rpm_min / RPM_BASE_REFERENCIA
   fator_max = rpm_max / RPM_BASE_REFERENCIA
   resultados = {}
@@ -348,9 +366,7 @@ def analisar_espectro_envoltoria(fft_freqs, fft_mag, rpm_min, rpm_max):
     f_low = freq_ref * fator_min
     f_high = freq_ref * fator_max
 
-    # Janela fundamental (1x)
     mask_1x = (fft_freqs >= f_low) & (fft_freqs <= f_high)
-    # Vizinhança local (excluindo 1x e 2x) para medir ruído de fundo real
     margem = max(12.0, (f_high - f_low) * 1.5)
     mask_viz = (
         (fft_freqs >= max(5.0, f_low - margem))
@@ -375,7 +391,6 @@ def analisar_espectro_envoltoria(fft_freqs, fft_mag, rpm_min, rpm_max):
     else:
       pico_1x, freq_pico_1x, snr_1x = 0.0, (f_low + f_high) / 2.0, 0.0
 
-    # Janela harmônica (2x)
     f2_low, f2_high = f_low * 2.0, f_high * 2.0
     mask_2x = (fft_freqs >= f2_low) & (fft_freqs <= f2_high)
     mask_viz_2x = (
@@ -405,52 +420,39 @@ def analisar_espectro_envoltoria(fft_freqs, fft_mag, rpm_min, rpm_max):
     freq_dominante = freq_pico_1x if snr_1x >= snr_2x else freq_pico_2x
     pico_dominante = pico_1x if snr_1x >= snr_2x else pico_2x
 
-    # Classificação de integridade da pista/componente
     if snr_max >= 2.5:
       suspeita_falha = True
-      status_pista = (
-          f"SINAL DE INÍCIO DE FALHA / PICO EXTERNO (Pico em"
-          f" {freq_dominante:.1f} Hz [{harmonico_dominante}], {snr_max:.1f}x"
-          " acima do ruído de fundo)."
-      )
-      detalhe_pista = (
-          "   • Leitura: Pico destacado detectado — pode ser início de falha"
-          " na pista ou pico vindo de outra fonte.\n"
-          "   • Ação obrigatória: Exige nova auscultação para confirmar se há"
-          " realmente falha."
+      badge = "ATENÇÃO / SUSPEITA"
+      resumo_tecnico = (
+          f"Pico destacado em {freq_dominante:.1f} Hz ({harmonico_dominante}),"
+          f" atingindo {snr_max:.1f}x o ruído de fundo. Pode indicar estágio"
+          " inicial de falha na pista ou interferência de fonte externa."
+          " Exige nova auscultação para confirmação."
       )
     else:
       suspeita_falha = False
-      status_pista = (
-          f"ÍNTEGRA (Sem picos relevantes; máx. {snr_max:.1f}x do ruído de"
-          f" fundo em {freq_dominante:.1f} Hz)."
-      )
-      detalhe_pista = (
-          "   • Leitura: Pista íntegra, dentro do comportamento normal de"
-          " ruído de fundo."
+      badge = "ÍNTEGRA"
+      resumo_tecnico = (
+          f"Sem picos relevantes acima do ruído de fundo (máx. {snr_max:.1f}x"
+          f" em {freq_dominante:.1f} Hz). Comportamento espectral compatível"
+          " com pista íntegra."
       )
 
     resultados[codigo] = {
         "f_low": f_low,
         "f_high": f_high,
-        "pico_1x": pico_1x,
-        "freq_pico_1x": freq_pico_1x,
-        "snr_1x": snr_1x,
-        "pico_2x": pico_2x,
-        "freq_pico_2x": freq_pico_2x,
-        "snr_2x": snr_2x,
         "snr_max": snr_max,
         "freq_dominante": freq_dominante,
         "pico_dominante": pico_dominante,
         "suspeita_falha": suspeita_falha,
-        "status_pista": status_pista,
-        "detalhe_pista": detalhe_pista,
+        "badge": badge,
+        "resumo_tecnico": resumo_tecnico,
     }
 
   return resultados
 
 
-def aplicar_marca_vinci_figura(fig, logo_img, data_assinatura):
+def aplicar_marca_vinci_graficos(fig, logo_img, data_assinatura):
   header_ax = fig.add_axes([0.0, 0.965, 1.0, 0.035])
   header_ax.set_facecolor("#0a1f3d")
   header_ax.set_xticks([])
@@ -467,6 +469,7 @@ def aplicar_marca_vinci_figura(fig, logo_img, data_assinatura):
       fontweight="bold",
       va="center",
       ha="left",
+      family="DejaVu Sans",
   )
   header_ax.text(
       0.985,
@@ -476,12 +479,487 @@ def aplicar_marca_vinci_figura(fig, logo_img, data_assinatura):
       fontsize=9,
       va="center",
       ha="right",
+      family="DejaVu Sans",
   )
 
   if logo_img is not None:
     logo_ax = fig.add_axes([0.88, 0.91, 0.10, 0.05])
     logo_ax.axis("off")
     logo_ax.imshow(logo_img)
+
+
+def gerar_pagina_laudo(
+    trecho,
+    tipo,
+    subtipo,
+    nome_arquivo,
+    data_assinatura,
+    rpm_faixa_str,
+    aceita_lub,
+    low_ef,
+    high_ef,
+    fator_crista,
+    analise_pistas,
+    pistas_com_alerta,
+    baixa_lubrificacao,
+    logo_img,
+):
+  """Gera a Página 2 (Laudo Técnico) em formato A4 centralizado e profissional."""
+  fig = plt.figure(figsize=(8.27, 11.69), facecolor="white")
+  ax = fig.add_axes([0, 0, 1, 1])
+  ax.set_xlim(0, 1)
+  ax.set_ylim(0, 1)
+  ax.axis("off")
+
+  fonte = "DejaVu Sans"
+  cor_navy = "#0a1f3d"
+  cor_azul = "#0284c7"
+  cor_texto = "#1e293b"
+  cor_subtexto = "#475569"
+  cor_borda = "#cbd5e1"
+  cor_fundo_card = "#f8fafc"
+
+  # --- 1. BARRA SUPERIOR INSTITUCIONAL ---
+  ax.add_patch(
+      FancyBboxPatch(
+          (0.0, 0.945),
+          1.0,
+          0.055,
+          boxstyle="square,pad=0",
+          facecolor=cor_navy,
+          edgecolor="none",
+      )
+  )
+  ax.text(
+      0.05,
+      0.973,
+      "VINCI AIRPORTS  |  INSPEÇÃO PREDITIVA AEROPORTUÁRIA",
+      color="#f8fafc",
+      fontsize=9.5,
+      fontweight="bold",
+      va="center",
+      ha="left",
+      family=fonte,
+  )
+  ax.text(
+      0.95,
+      0.973,
+      f"Emissão: {data_assinatura}",
+      color="#7dd3fc",
+      fontsize=8.2,
+      va="center",
+      ha="right",
+      family=fonte,
+  )
+
+  # --- 2. TÍTULO CENTRALIZADO E LOGO ---
+  if logo_img is not None:
+    logo_ax = fig.add_axes([0.81, 0.875, 0.13, 0.055])
+    logo_ax.axis("off")
+    logo_ax.imshow(logo_img)
+
+  ax.text(
+      0.50,
+      0.908,
+      "LAUDO TÉCNICO DE INSPEÇÃO PREDITIVA",
+      color=cor_navy,
+      fontsize=14.5,
+      fontweight="bold",
+      va="center",
+      ha="center",
+      family=fonte,
+  )
+  ax.text(
+      0.50,
+      0.885,
+      "Análise Acústica de Rolamentos por Envoltória — Aeroporto de Manaus"
+      " (MAO)",
+      color=cor_subtexto,
+      fontsize=8.8,
+      va="center",
+      ha="center",
+      family=fonte,
+  )
+  ax.plot([0.06, 0.94], [0.868, 0.868], color=cor_azul, linewidth=1.6)
+
+  # --- 3. SEÇÃO 1: IDENTIFICAÇÃO DO ATIVO (CARD CENTRALIZADO) ---
+  ax.text(
+      0.06,
+      0.848,
+      "1. IDENTIFICAÇÃO DO ATIVO E PARÂMETROS DE COLETA",
+      color=cor_navy,
+      fontsize=9.5,
+      fontweight="bold",
+      va="center",
+      ha="left",
+      family=fonte,
+  )
+  ax.add_patch(
+      FancyBboxPatch(
+          (0.06, 0.725),
+          0.88,
+          0.112,
+          boxstyle="round,pad=0.008,rounding_size=0.01",
+          facecolor=cor_fundo_card,
+          edgecolor=cor_borda,
+          linewidth=0.9,
+      )
+  )
+
+  col_esq = [
+      ("Tag / Trecho:", trecho),
+      ("Equipamento:", f"{tipo} — {subtipo}"),
+      ("Faixa de Rotação:", rpm_faixa_str),
+      ("Aceita Lubrificação:", "Sim" if aceita_lub else "Não (Rolamento Selado)"),
+  ]
+  col_dir = [
+      ("Unidade:", "Aeroporto de Manaus (MAO)"),
+      ("Banda Isolada:", f"{low_ef:.0f} Hz a {high_ef:.0f} Hz"),
+      ("Método Espectral:", "Welch (Mediana)"),
+      ("Fator de Crista:", f"{fator_crista:.2f}"),
+  ]
+
+  y_pos = 0.818
+  for (lbl_e, val_e), (lbl_d, val_d) in zip(col_esq, col_dir):
+    ax.text(
+        0.08,
+        y_pos,
+        lbl_e,
+        color=cor_subtexto,
+        fontsize=8.3,
+        fontweight="bold",
+        va="center",
+        ha="left",
+        family=fonte,
+    )
+    ax.text(
+        0.245,
+        y_pos,
+        val_e,
+        color=cor_texto,
+        fontsize=8.3,
+        va="center",
+        ha="left",
+        family=fonte,
+    )
+    ax.text(
+        0.53,
+        y_pos,
+        lbl_d,
+        color=cor_subtexto,
+        fontsize=8.3,
+        fontweight="bold",
+        va="center",
+        ha="left",
+        family=fonte,
+    )
+    ax.text(
+        0.695,
+        y_pos,
+        val_d,
+        color=cor_texto,
+        fontsize=8.3,
+        va="center",
+        ha="left",
+        family=fonte,
+    )
+    y_pos -= 0.023
+
+  ax.text(
+      0.08,
+      0.733,
+      f"Arquivo analisado: {nome_arquivo}",
+      color=cor_subtexto,
+      fontsize=7.6,
+      style="italic",
+      va="center",
+      ha="left",
+      family=fonte,
+  )
+
+  # --- 4. SEÇÃO 2: INTEGRIDADE DAS PISTAS (BPFO, BPFI, BSF) ---
+  ax.text(
+      0.06,
+      0.695,
+      "2. AVALIAÇÃO ESPECTRAL POR COMPONENTE (INTEGRIDADE DAS PISTAS)",
+      color=cor_navy,
+      fontsize=9.5,
+      fontweight="bold",
+      va="center",
+      ha="left",
+      family=fonte,
+  )
+
+  y_card = 0.600
+  for codigo in ["BPFO", "BPFI", "BSF"]:
+    info = analise_pistas[codigo]
+    alerta = info["suspeita_falha"]
+    cor_status = "#b91c1c" if alerta else "#15803d"
+    fundo_badge = "#fee2e2" if alerta else "#dcfce7"
+    borda_card = "#fca5a5" if alerta else cor_borda
+
+    ax.add_patch(
+        FancyBboxPatch(
+            (0.06, y_card),
+            0.88,
+            0.080,
+            boxstyle="round,pad=0.006,rounding_size=0.008",
+            facecolor="white",
+            edgecolor=borda_card,
+            linewidth=0.9,
+        )
+    )
+    # Faixa lateral colorida do componente
+    ax.add_patch(
+        FancyBboxPatch(
+            (0.06, y_card),
+            0.008,
+            0.080,
+            boxstyle="square,pad=0",
+            facecolor=CORES_FALHA[codigo],
+            edgecolor="none",
+        )
+    )
+
+    titulo_comp = (
+        f"{NOMES_COMPONENTES[codigo]}   •   Janela:"
+        f" {info['f_low']:.2f} a {info['f_high']:.2f} Hz"
+    )
+    ax.text(
+        0.082,
+        y_card + 0.061,
+        titulo_comp,
+        color=cor_navy,
+        fontsize=8.6,
+        fontweight="bold",
+        va="center",
+        ha="left",
+        family=fonte,
+    )
+
+    # Selo de status à direita
+    ax.add_patch(
+        FancyBboxPatch(
+            (0.755, y_card + 0.050),
+            0.172,
+            0.022,
+            boxstyle="round,pad=0.003,rounding_size=0.006",
+            facecolor=fundo_badge,
+            edgecolor="none",
+        )
+    )
+    ax.text(
+        0.841,
+        y_card + 0.061,
+        info["badge"],
+        color=cor_status,
+        fontsize=7.3,
+        fontweight="bold",
+        va="center",
+        ha="center",
+        family=fonte,
+    )
+
+    texto_wrap = textwrap.fill(info["resumo_tecnico"], width=95)
+    ax.text(
+        0.082,
+        y_card + 0.041,
+        texto_wrap,
+        color=cor_texto,
+        fontsize=7.9,
+        va="top",
+        ha="left",
+        family=fonte,
+        linespacing=1.35,
+    )
+    y_card -= 0.095
+
+  # --- 5. SEÇÃO 3: PARECER TÉCNICO CONSOLIDADO ---
+  ax.text(
+      0.06,
+      0.388,
+      "3. PARECER TÉCNICO CONSOLIDADO (PISTAS E LUBRIFICAÇÃO)",
+      color=cor_navy,
+      fontsize=9.5,
+      fontweight="bold",
+      va="center",
+      ha="left",
+      family=fonte,
+  )
+
+  houve_alerta = bool(pistas_com_alerta) or baixa_lubrificacao
+  fundo_parecer = "#fff7ed" if houve_alerta else "#f0fdf4"
+  borda_parecer = "#f97316" if houve_alerta else "#22c55e"
+  cor_titulo_parecer = "#9a3412" if houve_alerta else "#166534"
+
+  ax.add_patch(
+      FancyBboxPatch(
+          (0.06, 0.245),
+          0.88,
+          0.128,
+          boxstyle="round,pad=0.008,rounding_size=0.01",
+          facecolor=fundo_parecer,
+          edgecolor=borda_parecer,
+          linewidth=1.1,
+      )
+  )
+
+  if pistas_com_alerta:
+    txt_pistas = (
+        f"Integridade das Pistas: Foram identificados picos destacados em"
+        f" {', '.join(pistas_com_alerta)}. O comportamento pode corresponder a"
+        " início de falha no rolamento ou a interferência externa (cavitação,"
+        " fluxo hidráulico ou carga mecânica adjacente)."
+    )
+  else:
+    txt_pistas = (
+        "Integridade das Pistas: Todas as pistas avaliadas (BPFO, BPFI e BSF)"
+        " apresentaram-se íntegras, sem assinaturas periódicas de início de"
+        " falha no espectro de envoltória."
+    )
+
+  if baixa_lubrificacao and aceita_lub:
+    txt_lub = (
+        "Condição de Lubrificação: Detectado indício de baixa lubrificação"
+        " (atrito/impulsividade elevada) em rolamento que aceita"
+        " relubrificação. Deve ser feita a lubrificação e realizada uma nova"
+        " auscultação."
+    )
+  elif baixa_lubrificacao and not aceita_lub:
+    txt_lub = (
+        "Condição de Lubrificação: Detectado nível elevado de impulsividade /"
+        " atrito na banda de alta frequência. Este ativo possui rolamento que"
+        " não aceita lubrificação, exigindo acompanhamento criterioso."
+    )
+  elif aceita_lub:
+    txt_lub = (
+        "Condição de Lubrificação: Parâmetros de atrito e impulsividade dentro"
+        " da normalidade. Sem necessidade de intervenção imediata de"
+        " lubrificação."
+    )
+  else:
+    txt_lub = (
+        "Condição de Lubrificação: Rolamento selado (não aceita lubrificação),"
+        " operando com níveis estáveis na faixa avaliada."
+    )
+
+  titulo_cond = (
+      "CONDIÇÃO GERAL: ATENÇÃO — VERIFICAÇÃO EM CAMPO EXIGIDA"
+      if houve_alerta
+      else "CONDIÇÃO GERAL: SAUDÁVEL — OPERAÇÃO NORMAL"
+  )
+  ax.text(
+      0.08,
+      0.355,
+      titulo_cond,
+      color=cor_titulo_parecer,
+      fontsize=8.8,
+      fontweight="bold",
+      va="center",
+      ha="left",
+      family=fonte,
+  )
+  ax.text(
+      0.08,
+      0.335,
+      textwrap.fill(txt_pistas, width=96),
+      color=cor_texto,
+      fontsize=8.0,
+      va="top",
+      ha="left",
+      family=fonte,
+      linespacing=1.35,
+  )
+  ax.text(
+      0.08,
+      0.285,
+      textwrap.fill(txt_lub, width=96),
+      color=cor_texto,
+      fontsize=8.0,
+      va="top",
+      ha="left",
+      family=fonte,
+      linespacing=1.35,
+  )
+
+  # --- 6. SEÇÃO 4: DIRETRIZES E EXIGÊNCIAS DE CAMPO ---
+  ax.text(
+      0.06,
+      0.215,
+      "4. DIRETRIZES E EXIGÊNCIAS TÉCNICAS DE MANUTENÇÃO",
+      color=cor_navy,
+      fontsize=9.5,
+      fontweight="bold",
+      va="center",
+      ha="left",
+      family=fonte,
+  )
+  ax.add_patch(
+      FancyBboxPatch(
+          (0.06, 0.085),
+          0.88,
+          0.115,
+          boxstyle="round,pad=0.008,rounding_size=0.01",
+          facecolor=cor_fundo_card,
+          edgecolor=cor_borda,
+          linewidth=0.9,
+      )
+  )
+
+  acoes = []
+  if baixa_lubrificacao and aceita_lub:
+    acoes.append(
+        "• LUBRIFICAÇÃO OBRIGATÓRIA: Executar a lubrificação do rolamento"
+        " conforme plano técnico e realizar nova auscultação logo após a"
+        " estabilização."
+    )
+  if pistas_com_alerta or baixa_lubrificacao:
+    acoes.append(
+        "• NOVA AUSCULTAÇÃO EXIGIDA: O técnico deve repetir a coleta com o"
+        " sensor firmemente apoiado no mancal (mín. 10 segundos) para"
+        " confirmar se há falha real ou pico de fonte externa."
+    )
+  else:
+    acoes.append(
+        "• MANUTENÇÃO PREVENTIVA: Manter o ativo no ciclo normal de"
+        " acompanhamento preditivo periódico."
+    )
+  acoes.append(
+      "• RASTREABILIDADE: Manter o registro desta inspeção na planilha de"
+      " controle operacional da unidade para acompanhamento de tendência."
+  )
+
+  y_acao = 0.186
+  for acao in acoes:
+    wrapped = textwrap.fill(acao, width=96)
+    ax.text(
+        0.08,
+        y_acao,
+        wrapped,
+        color=cor_texto,
+        fontsize=8.0,
+        va="top",
+        ha="left",
+        family=fonte,
+        linespacing=1.35,
+    )
+    y_acao -= 0.036
+
+  # --- 7. RODAPÉ CENTRALIZADO ---
+  ax.plot([0.06, 0.94], [0.055, 0.055], color=cor_borda, linewidth=0.8)
+  ax.text(
+      0.50,
+      0.035,
+      "Documento gerado automaticamente • Sistema de Manutenção Preditiva"
+      " VINCI Airports — Manaus (MAO)",
+      color=cor_subtexto,
+      fontsize=7.5,
+      va="center",
+      ha="center",
+      family=fonte,
+  )
+
+  return fig
 
 
 def processar_automatico(caminho_audio, trecho, perfil):
@@ -505,18 +983,12 @@ def processar_automatico(caminho_audio, trecho, perfil):
   D = librosa.stft(sinal_isolado, n_fft=n_fft, hop_length=512)
   S_db = librosa.amplitude_to_db(np.abs(D), ref=np.max)
 
-  env_centered = envelope - np.mean(envelope)
-  janela = np.hanning(len(env_centered))
-  fft_vals = np.fft.rfft(env_centered * janela)
-  fft_freqs = np.fft.rfftfreq(len(env_centered), d=1 / sr)
-  fft_mag = (np.abs(fft_vals) * 2.0) / np.sum(janela)
-
-  # --- LEITURA REAL DO ESPECTRO DE ENVOLTÓRIA ---
+  fft_freqs, fft_mag = calcular_espectro_welch_mediana(envelope, sr)
   analise_pistas = analisar_espectro_envoltoria(
       fft_freqs, fft_mag, rpm_min, rpm_max
   )
 
-  # --- 1. GERAR GRÁFICOS (PÁGINA 1) ---
+  # --- PÁGINA 1: GRÁFICOS ---
   fig_graficos = plt.figure(figsize=(12, 11.5))
   plt.suptitle(
       f"ANÁLISE ISOLADA DE ROLAMENTO ({tipo.upper()} - {subtipo.upper()}) |"
@@ -555,7 +1027,7 @@ def processar_automatico(caminho_audio, trecho, perfil):
       fft_mag,
       color="#0f172a",
       linewidth=1.2,
-      label="Espectro de Envoltória",
+      label="Espectro de Envoltória (Welch Mediana)",
       zorder=3,
   )
 
@@ -584,7 +1056,6 @@ def processar_automatico(caminho_audio, trecho, perfil):
         zorder=2,
     )
 
-    # Destaca visualmente no gráfico se houve pico suspeito na faixa
     if info["suspeita_falha"]:
       ax3.scatter(
           [info["freq_dominante"]],
@@ -605,7 +1076,7 @@ def processar_automatico(caminho_audio, trecho, perfil):
       )
 
   ax3.set_title(
-      "3. Espectro de Envoltória (Leitura Automática — Faixa"
+      "3. Espectro de Envoltória — Método de Welch/Mediana (Faixa"
       f" {rpm_faixa_str})"
   )
   ax3.set_xlabel("Frequência (Hz)")
@@ -615,11 +1086,9 @@ def processar_automatico(caminho_audio, trecho, perfil):
   ax3.legend(loc="upper right", framealpha=0.92, fontsize=8.5)
 
   plt.tight_layout(rect=[0, 0, 1, 0.89])
-  aplicar_marca_vinci_figura(fig_graficos, logo_vinci, data_assinatura)
-  caminho_graficos = "relatorio_visual_graficos.png"
-  plt.savefig(caminho_graficos, dpi=150, bbox_inches="tight")
+  aplicar_marca_vinci_graficos(fig_graficos, logo_vinci, data_assinatura)
 
-  # --- 2. DIAGNÓSTICO DE PISTAS + LUBRIFICAÇÃO E LAUDO ESCRITO (PÁGINA 2) ---
+  # --- INDICADORES DE LUBRIFICAÇÃO / IMPULSIVIDADE ---
   rms_env = np.sqrt(np.mean(envelope**2))
   pico_env = np.max(envelope)
   fator_crista = (pico_env / rms_env) if rms_env > 0 else 0.0
@@ -631,58 +1100,10 @@ def processar_automatico(caminho_audio, trecho, perfil):
   )
 
   baixa_lubrificacao = (fator_crista > 6.0) or (energia_lubrificacao > -32.0)
-
   pistas_com_alerta = [
       cod for cod, dados in analise_pistas.items() if dados["suspeita_falha"]
   ]
 
-  # Parecer consolidado das pistas
-  if pistas_com_alerta:
-    lista_pistas = ", ".join(pistas_com_alerta)
-    parecer_pistas = (
-        f"ALERTA NAS PISTAS ({lista_pistas}): Detectado sinal de início de"
-        " falha ou pico vindo de outra fonte externa.\n"
-        "   -> EXIGÊNCIA TÉCNICA: O técnico DEVE realizar uma nova"
-        " auscultação para confirmar se há realmente uma falha."
-    )
-  else:
-    parecer_pistas = (
-        "PISTAS ÍNTEGRAS: Nenhuma assinatura de início de falha identificada"
-        " nas janelas BPFO, BPFI e BSF."
-    )
-
-  # Parecer consolidado de lubrificação
-  if baixa_lubrificacao and aceita_lub:
-    status_lub = (
-        "Baixa lubrificação detectada — deve ser feita a lubrificação e"
-        " realizar uma nova auscultação."
-    )
-    acao_lub_texto = (
-        "• LUBRIFICAÇÃO: Baixa lubrificação detectada (rolamento aceita"
-        " lubrificação).\n"
-        "   -> Deve ser feita a lubrificação e realizar uma nova auscultação."
-    )
-  elif baixa_lubrificacao and not aceita_lub:
-    status_lub = (
-        "Impulsividade/atrito elevado (Rolamento não aceita lubrificação)."
-    )
-    acao_lub_texto = (
-        "• LUBRIFICAÇÃO: Atrito/impulsividade elevada, porém este rolamento"
-        " NÃO aceita lubrificação.\n"
-        "   -> Realizar nova auscultação de confirmação e acompanhar"
-        " evolução."
-    )
-  elif aceita_lub:
-    status_lub = "Lubrificação estável (Aceita lubrificação)."
-    acao_lub_texto = (
-        "• LUBRIFICAÇÃO: Sem indicativo de baixa lubrificação no momento"
-        " (rolamento aceita lubrificação)."
-    )
-  else:
-    status_lub = "Lubrificação/atrito estável (Não aceita lubrificação)."
-    acao_lub_texto = "• LUBRIFICAÇÃO: Rolamento selado / não aceita lubrificação."
-
-  # Status resumido para tela e planilha
   if pistas_com_alerta and (baixa_lubrificacao and aceita_lub):
     status_geral = (
         f"ALERTA ({', '.join(pistas_com_alerta)} + Baixa Lubrificação): Pode"
@@ -710,81 +1131,29 @@ def processar_automatico(caminho_audio, trecho, perfil):
         " lubrificação."
     )
 
-  bpfo = analise_pistas["BPFO"]
-  bpfi = analise_pistas["BPFI"]
-  bsf = analise_pistas["BSF"]
-
-  fig_laudo, ax_laudo = plt.subplots(figsize=(10, 12.0))
-  ax_laudo.axis("off")
-
-  selo_texto = "" if logo_vinci is not None else "[ VINCI AIRPORTS ]\n"
-  texto_laudo = (
-      "========================================================================\n"
-      f"{selo_texto}       LAUDO TÉCNICO DE INSPEÇÃO PREDITIVA — OPERAÇÃO"
-      " AEROPORTUÁRIA     \n"
-      "========================================================================\n\n"
-      f"Unidade / Localidade: Aeroporto de Manaus (MAO) — Horário Local AMT\n"
-      f"Tipo de Ativo: {tipo} — {subtipo}\n"
-      f"Identificação do Trecho / Tag: {trecho}\n"
-      f"Arquivo de Áudio: {nome_arquivo}\n"
-      f"Data e Hora da Emissão: {data_assinatura}\n"
-      f"Faixa de Rotação do Ativo: {rpm_faixa_str} | Aceita Lubrificação:"
-      f" {'Sim' if aceita_lub else 'Não'}\n"
-      f"Banda Isolada: {low_ef:.0f} Hz a {high_ef:.0f} Hz | Fator de Crista:"
-      f" {fator_crista:.2f}\n\n"
-      "------------------------------------------------------------------------\n"
-      "1. LEITURA AUTOMÁTICA DO ESPECTRO DE ENVOLTÓRIA (INTEGRIDADE DAS PISTAS):\n"
-      "------------------------------------------------------------------------\n"
-      f"🔴 PISTA EXTERNA (BPFO) [{bpfo['f_low']:.2f} a {bpfo['f_high']:.2f} Hz]:\n"
-      f"   • Status: {bpfo['status_pista']}\n"
-      f"{bpfo['detalhe_pista']}\n\n"
-      f"🔵 PISTA INTERNA (BPFI) [{bpfi['f_low']:.2f} a {bpfi['f_high']:.2f} Hz]:\n"
-      f"   • Status: {bpfi['status_pista']}\n"
-      f"{bpfi['detalhe_pista']}\n\n"
-      f"🟢 ELEMENTOS ROLANTES (BSF) [{bsf['f_low']:.2f} a {bsf['f_high']:.2f} Hz]:\n"
-      f"   • Status: {bsf['status_pista']}\n"
-      f"{bsf['detalhe_pista']}\n\n"
-      "------------------------------------------------------------------------\n"
-      "2. DIAGNÓSTICO FINAL (PISTAS E LUBRIFICAÇÃO):\n"
-      "------------------------------------------------------------------------\n"
-      f"• INTEGRIDADE: {parecer_pistas}\n"
-      f"{acao_lub_texto}\n\n"
-      "------------------------------------------------------------------------\n"
-      "3. EXIGÊNCIA / RECOMENDAÇÃO TÉCNICA DE CAMPO:\n"
-      "------------------------------------------------------------------------\n"
-      + (
-          "   • EXIGÊNCIA: Realizar NOVA AUSCULTAÇÃO posicionando o sensor"
-          " firme\n"
-          "     no mancal para confirmar se o pico é falha real ou fonte"
-          " externa.\n"
-          if (pistas_com_alerta or baixa_lubrificacao)
-          else "   • Manter rotina periódica de inspeção preditiva.\n"
-      )
-      + "   • Registrar resultado na planilha de controle operacional.\n"
-      "========================================================================"
-  )
-  ax_laudo.text(
-      0.01,
-      0.93,
-      texto_laudo,
-      fontsize=9.3,
-      family="monospace",
-      verticalalignment="top",
-      horizontalalignment="left",
-      bbox=dict(
-          boxstyle="round,pad=0.5", facecolor="#f8fafc", edgecolor="#0f294a"
-      ),
+  # --- PÁGINA 2: LAUDO TÉCNICO CENTRALIZADO ---
+  fig_laudo = gerar_pagina_laudo(
+      trecho=trecho,
+      tipo=tipo,
+      subtipo=subtipo,
+      nome_arquivo=nome_arquivo,
+      data_assinatura=data_assinatura,
+      rpm_faixa_str=rpm_faixa_str,
+      aceita_lub=aceita_lub,
+      low_ef=low_ef,
+      high_ef=high_ef,
+      fator_crista=fator_crista,
+      analise_pistas=analise_pistas,
+      pistas_com_alerta=pistas_com_alerta,
+      baixa_lubrificacao=baixa_lubrificacao,
+      logo_img=logo_vinci,
   )
 
-  aplicar_marca_vinci_figura(fig_laudo, logo_vinci, data_assinatura)
-  caminho_laudo = "relatorio_escrito_laudo.png"
-  plt.savefig(caminho_laudo, dpi=150, bbox_inches="tight")
-
-  # --- 3. UNIFICAR EM UM ÚNICO PDF (2 PÁGINAS) ---
+  # --- UNIFICAR EM UM ÚNICO PDF (2 PÁGINAS) ---
   caminho_pdf_unificado = f"VINCI_{trecho}_{tipo.replace(' ', '_')}_Relatorio.pdf"
   with PdfPages(caminho_pdf_unificado) as pdf:
     pdf.savefig(fig_graficos, bbox_inches="tight")
-    pdf.savefig(fig_laudo, bbox_inches="tight")
+    pdf.savefig(fig_laudo)
 
   plt.close(fig_graficos)
   plt.close(fig_laudo)
@@ -814,7 +1183,7 @@ if uploaded_file is not None:
       )
     else:
       with st.spinner(
-          f"Lendo espectro de envoltória de {trecho_selecionado}"
+          f"Analisando {trecho_selecionado} com Welch/Mediana"
           f" ({perfil_ativo['rpm_min']} a {perfil_ativo['rpm_max']} RPM)..."
       ):
         pdf_gerado, status, emissao_str = processar_automatico(

@@ -86,12 +86,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --- CADASTRO DE ATIVOS / TAGS POR SUBTIPO DE BOMBA ---
+# --- 1. CADASTRO DE BOMBAS ---
 CADASTRO_BOMBAS = {
     **{
         tag: {
             "tipo": "Bomba",
             "subtipo": "Água Gelada Secundária",
+            "trecho_bhs": None,
+            "rolamento_la": None,
+            "rolamento_loa": None,
             "rpm_min": 2900,
             "rpm_max": 3100,
             "rpm_nominal": 3000,
@@ -113,6 +116,9 @@ CADASTRO_BOMBAS = {
         tag: {
             "tipo": "Bomba",
             "subtipo": "Água Gelada Primária",
+            "trecho_bhs": None,
+            "rolamento_la": None,
+            "rolamento_loa": None,
             "rpm_min": 1650,
             "rpm_max": 1750,
             "rpm_nominal": 1700,
@@ -136,6 +142,9 @@ CADASTRO_BOMBAS = {
         tag: {
             "tipo": "Bomba",
             "subtipo": "Água Condensada",
+            "trecho_bhs": None,
+            "rolamento_la": None,
+            "rolamento_loa": None,
             "rpm_min": 1500,
             "rpm_max": 1650,
             "rpm_nominal": 1575,
@@ -157,9 +166,97 @@ CADASTRO_BOMBAS = {
     },
 }
 
+# --- 2. CADASTRO DE MOTOREDUTORES DAS ESTEIRAS (BHS) ---
+# Formato: TAG: (Trecho, BHS, Rolamento LA, Rolamento LOA) — todos blindados (Não aceitam lubrificação)
+DADOS_BHS_RAW = {
+    # Azul (MCP1)
+    "MAOESLP051": ("TL1.3", "Azul (MCP1)", "6306-2Z", "6205-2Z"),
+    "MAOESLP052": ("TL1.4", "Azul (MCP1)", "6306-2Z", "6205-2Z"),
+    "MAOESLP053": ("TL1.5", "Azul (MCP1)", "6306-2Z", "6205-2Z"),
+    "MAOESLP054": ("TL1.6", "Azul (MCP1)", "6304-2Z", "6304-2Z"),
+    "MAOESLP055": ("TL1.7", "Azul (MCP1)", "6304-2Z", "6304-2RS"),
+    "MAOESLP056": ("TL1.8", "Azul (MCP1)", "6304-2Z", "6304-2RS"),
+    "MAOESLP057": ("TL1.9", "Azul (MCP1)", "6304-2Z", "6304-2RS"),
+    "MAOESLP058": ("TL1.10", "Azul (MCP1)", "6304-2Z", "6304-2Z"),
+    "MAOESLP059": ("TL1.11", "Azul (MCP1)", "6304-2Z", "6304-2Z"),
+    "MAOESLP060": ("TL1.12", "Azul (MCP1)", "6304-2Z", "6304-2Z"),
+    "MAOESLP061": ("TL1.13", "Azul (MCP1)", "6304-2Z", "6304-2RS"),
+    "MAOESLP062": ("TL1.14", "Azul (MCP1)", "6304-2Z", "6304-2RS"),
+    "MAOESLP063": ("TL1.15", "Azul (MCP1)", "6304-2Z", "6304-2RS"),
+    "MAOESLP064": ("TL1.16", "Azul (MCP1)", "6304-2Z", "6304-2RS"),
+    "MAOESLP065": ("TL1.17", "Azul (MCP1)", "6304-2Z", "6304-2RS"),
+    # Gol (MCP2)
+    "MAOESLP001": ("TL2.1", "Gol (MCP2)", "6306-2Z", "6205-2Z"),
+    "MAOESLP002": ("TL2.2", "Gol (MCP2)", "6306-2Z", "6205-2Z"),
+    "MAOESLP004": ("TL2.4", "Gol (MCP2)", "6306-2Z", "6205-2Z"),
+    "MAOESLP005": ("TL2.5", "Gol (MCP2)", "6304-2Z", "6304-2Z"),
+    "MAOESLP006": ("TL2.6", "Gol (MCP2)", "6306-2Z", "6205-2Z"),
+    "MAOESLP007": ("TL2.7", "Gol (MCP2)", "6304-2Z", "6304-2RS"),
+    "MAOESLP008": ("TL2.8", "Gol (MCP2)", "6304-2Z", "6304-2RS"),
+    "MAOESLP009": ("TL2.9", "Gol (MCP2)", "6304-2Z", "6304-2RS"),
+    "MAOESLP012": ("TL2.12", "Gol (MCP2)", "6304-2Z", "6304-2Z"),
+    "MAOESLP013": ("TL2.13", "Gol (MCP2)", "6306-2Z", "6205-2Z"),
+    "MAOESLP014": ("TL2.14", "Gol (MCP2)", "6306-2Z", "6205-2Z"),
+    "MAOESLP015": ("TL2.15", "Gol (MCP2)", "6304-2Z", "6304-2RS"),
+    "MAOESLP016": ("TL2.16", "Gol (MCP2)", "6306-2Z", "6205-2Z"),
+    "MAOESLP017": ("TL2.17", "Gol (MCP2)", "6304-2Z", "6304-2RS"),
+    "MAOESLP018": ("TL2.18", "Gol (MCP2)", "6304-2Z", "6304-2RS"),
+    # Internacional (MCP3)
+    "MAOESLP037": ("TL3.1", "Internacional (MCP3)", "6306-2Z", "6205-2Z"),
+    "MAOESLP038": ("TL3.2", "Internacional (MCP3)", "6306-2Z", "6205-2Z"),
+    "MAOESLP039": ("TL3.3", "Internacional (MCP3)", "6304-2Z", "6304-2RS"),
+    "MAOESLP040": ("TL3.4", "Internacional (MCP3)", "6304-2Z", "6304-2Z"),
+    "MAOESLP041": ("TL3.5", "Internacional (MCP3)", "6304-2Z", "6304-2RS"),
+    "MAOESLP042": ("TL3.6", "Internacional (MCP3)", "6304-2Z", "6304-2Z"),
+    "MAOESLP043": ("TL3.7", "Internacional (MCP3)", "6304-2Z", "6304-2RS"),
+    "MAOESLP044": ("TL3.8", "Internacional (MCP3)", "6304-2Z", "6304-2RS"),
+    "MAOESLP045": ("TL3.9", "Internacional (MCP3)", "6304-2Z", "6304-2RS"),
+    "MAOESLP046": ("TL3.10", "Internacional (MCP3)", "6304-2Z", "6304-2Z"),
+    "MAOESLP047": ("TL3.11", "Internacional (MCP3)", "6304-2Z", "6304-2Z"),
+    "MAOESLP048": ("TL3.12", "Internacional (MCP3)", "6304-2Z", "6304-2Z"),
+    # Latam (MCP4)
+    "MAOESLP019": ("TL4.1", "Latam (MCP4)", "6306-2Z", "6205-2Z"),
+    "MAOESLP020": ("TL4.2", "Latam (MCP4)", "6304-2Z", "6304-2Z"),
+    "MAOESLP021": ("TL4.3", "Latam (MCP4)", "6304-2Z", "6304-2RS"),
+    "MAOESLP022": ("TL4.4", "Latam (MCP4)", "6306-2Z", "6205-2Z"),
+    "MAOESLP024": ("TL4.6", "Latam (MCP4)", "6304-2Z", "6304-2RS"),
+    "MAOESLP025": ("TL4.7", "Latam (MCP4)", "6304-2Z", "6304-2Z"),
+    "MAOESLP026": ("TL4.8", "Latam (MCP4)", "6304-2Z", "6304-2RS"),
+    "MAOESLP027": ("TL4.9", "Latam (MCP4)", "6304-2Z", "6304-2Z"),
+    "MAOESLP028": ("TL4.10", "Latam (MCP4)", "6304-2Z", "6304-2RS"),
+    "MAOESLP032": ("TL4.14", "Latam (MCP4)", "6304-2Z", "6304-2RS"),
+    "MAOESLP033": ("TL4.15", "Latam (MCP4)", "6306-2Z", "6205-2Z"),
+    "MAOESLP034": ("TL4.16", "Latam (MCP4)", "6304-2Z", "6304-2RS"),
+    "MAOESLP035": ("TL4.17", "Latam (MCP4)", "6304-2Z", "6304-2RS"),
+    "MAOESLP036": ("TL4.18", "Latam (MCP4)", "6304-2Z", "6304-2RS"),
+}
+
+CADASTRO_MOTOREDUTORES = {
+    tag: {
+        "tipo": "Moto Redutor",
+        "subtipo": f"BHS {bhs}",
+        "trecho_bhs": trecho_bhs,
+        "rolamento_la": rol_la,
+        "rolamento_loa": rol_loa,
+        "rpm_min": 1500,
+        "rpm_max": 1750,
+        "rpm_nominal": 1750,
+        "aceita_lubrificacao": False,  # Todos 2Z / 2RS (blindados)
+        "lowcut": 3000,
+        "highcut": 9500,
+        "lp_env": 500,
+    }
+    for tag, (trecho_bhs, bhs, rol_la, rol_loa) in DADOS_BHS_RAW.items()
+}
+
+CADASTRO_ATIVOS = {**CADASTRO_BOMBAS, **CADASTRO_MOTOREDUTORES}
+
 CONFIG_PADRAO_OUTROS = {
     "Bomba": {
         "subtipo": "Não Especificado",
+        "trecho_bhs": None,
+        "rolamento_la": None,
+        "rolamento_loa": None,
         "rpm_min": 1500,
         "rpm_max": 1750,
         "rpm_nominal": 1750,
@@ -169,11 +266,14 @@ CONFIG_PADRAO_OUTROS = {
         "lp_env": 500,
     },
     "Moto Redutor": {
-        "subtipo": "Moto Redutor",
+        "subtipo": "Moto Redutor (Não Cadastrado)",
+        "trecho_bhs": None,
+        "rolamento_la": None,
+        "rolamento_loa": None,
         "rpm_min": 1500,
         "rpm_max": 1750,
         "rpm_nominal": 1750,
-        "aceita_lubrificacao": True,
+        "aceita_lubrificacao": False,
         "lowcut": 3000,
         "highcut": 9500,
         "lp_env": 500,
@@ -204,8 +304,8 @@ def carregar_logo_vinci():
 
 
 def obter_perfil_ativo(trecho, tipo_selecionado):
-  if trecho in CADASTRO_BOMBAS:
-    perfil = dict(CADASTRO_BOMBAS[trecho])
+  if trecho in CADASTRO_ATIVOS:
+    perfil = dict(CADASTRO_ATIVOS[trecho])
     perfil["cadastrado"] = True
     return perfil
   perfil = dict(
@@ -242,7 +342,7 @@ with col_header:
       <div class="aero-banner" style="margin-bottom:0;">
           <div class="aero-tag">✈️ MANAUS • OPERAÇÃO AEROPORTUÁRIA • MANUTENÇÃO PREDITIVA</div>
           <div class="aero-title">Análise Acústica de Rolamentos</div>
-          <div class="aero-sub">Envoltória por Welch (Mediana), rotação por tag e emissão de laudo técnico.</div>
+          <div class="aero-sub">Envoltória por Welch (Mediana), cadastro de Bombas e BHS e emissão de laudo técnico.</div>
       </div>
       """,
       unsafe_allow_html=True,
@@ -252,16 +352,16 @@ st.write("")
 
 # --- 1. CÓDIGO DO TRECHO / TAG (TRAVADO EM MAIÚSCULAS) ---
 trecho_input = st.text_input(
-    "📍 Código do Trecho / Tag (Apenas letras maiúsculas — Ex: MAOMBOM061):",
+    "📍 Código do Trecho / Tag (Ex: MAOMBOM061 ou MAOESLP054):",
     value="",
-    max_chars=10,
-    placeholder="EX: MAOMBOM061",
+    max_chars=12,
+    placeholder="EX: MAOESLP054",
 )
 trecho_selecionado = trecho_input.upper().strip()
 
-# --- 2. TIPO DE ATIVO ---
+# --- 2. TIPO DE ATIVO (USADO COMO FALLBACK SE A TAG NÃO ESTIVER CADASTRADA) ---
 tipo_ativo_manual = st.radio(
-    "⚙️ Tipo de Equipamento:",
+    "⚙️ Tipo de Equipamento (caso a tag não esteja cadastrada):",
     options=["Bomba", "Moto Redutor"],
     horizontal=True,
 )
@@ -273,17 +373,24 @@ if trecho_selecionado:
   lub_texto = (
       "Aceita lubrificação"
       if perfil_ativo["aceita_lubrificacao"]
-      else "Não aceita lubrificação"
+      else "Não (Rolamento Blindado)"
   )
   origem_tag = (
-      "Tag cadastrada"
+      "Tag cadastrada no sistema"
       if perfil_ativo["cadastrado"]
       else "Tag não cadastrada (usando faixa padrão)"
   )
+  detalhe_rol = ""
+  if perfil_ativo["rolamento_la"] and perfil_ativo["rolamento_loa"]:
+    detalhe_rol = (
+        f"\n\n**Trecho BHS:** `{perfil_ativo['trecho_bhs']}` • "
+        f"**Rolamento LA:** `{perfil_ativo['rolamento_la']}` • "
+        f"**Rolamento LOA:** `{perfil_ativo['rolamento_loa']}`"
+    )
   st.info(
       f"**Ativo:** {tipo_ativo} ({perfil_ativo['subtipo']}) • **Faixa de"
       f" Rotação:** {perfil_ativo['rpm_min']} a {perfil_ativo['rpm_max']} RPM"
-      f" • **Lubrificação:** {lub_texto}\n\n*{origem_tag}*"
+      f" • **Lubrificação:** {lub_texto}{detalhe_rol}\n\n*{origem_tag}*"
   )
 
 # --- 3. UPLOAD DE ÁUDIO (INCLUINDO MPEG) ---
@@ -490,12 +597,10 @@ def aplicar_marca_vinci_graficos(fig, logo_img, data_assinatura):
 
 def gerar_pagina_laudo(
     trecho,
-    tipo,
-    subtipo,
+    perfil,
     nome_arquivo,
     data_assinatura,
     rpm_faixa_str,
-    aceita_lub,
     low_ef,
     high_ef,
     fator_crista,
@@ -510,6 +615,13 @@ def gerar_pagina_laudo(
   ax.set_xlim(0, 1)
   ax.set_ylim(0, 1)
   ax.axis("off")
+
+  tipo = perfil["tipo"]
+  subtipo = perfil["subtipo"]
+  aceita_lub = perfil["aceita_lubrificacao"]
+  trecho_bhs = perfil.get("trecho_bhs")
+  rol_la = perfil.get("rolamento_la")
+  rol_loa = perfil.get("rolamento_loa")
 
   fonte = "DejaVu Sans"
   cor_navy = "#0a1f3d"
@@ -596,9 +708,9 @@ def gerar_pagina_laudo(
   )
   ax.add_patch(
       FancyBboxPatch(
-          (0.06, 0.725),
+          (0.06, 0.715),
           0.88,
-          0.112,
+          0.122,
           boxstyle="round,pad=0.008,rounding_size=0.01",
           facecolor=cor_fundo_card,
           edgecolor=cor_borda,
@@ -606,11 +718,18 @@ def gerar_pagina_laudo(
       )
   )
 
+  equip_label = f"{tipo} — {subtipo}"
+  if trecho_bhs:
+    equip_label = f"{tipo} — {subtipo} ({trecho_bhs})"
+
   col_esq = [
       ("Tag / Trecho:", trecho),
-      ("Equipamento:", f"{tipo} — {subtipo}"),
+      ("Equipamento:", equip_label),
       ("Faixa de Rotação:", rpm_faixa_str),
-      ("Aceita Lubrificação:", "Sim" if aceita_lub else "Não (Rolamento Selado)"),
+      (
+          "Aceita Lubrificação:",
+          "Sim" if aceita_lub else "Não (Rolamento Blindado)",
+      ),
   ]
   col_dir = [
       ("Unidade:", "Aeroporto de Manaus (MAO)"),
@@ -619,14 +738,14 @@ def gerar_pagina_laudo(
       ("Fator de Crista:", f"{fator_crista:.2f}"),
   ]
 
-  y_pos = 0.818
+  y_pos = 0.822
   for (lbl_e, val_e), (lbl_d, val_d) in zip(col_esq, col_dir):
     ax.text(
         0.08,
         y_pos,
         lbl_e,
         color=cor_subtexto,
-        fontsize=8.3,
+        fontsize=8.2,
         fontweight="bold",
         va="center",
         ha="left",
@@ -637,38 +756,45 @@ def gerar_pagina_laudo(
         y_pos,
         val_e,
         color=cor_texto,
-        fontsize=8.3,
+        fontsize=8.2,
         va="center",
         ha="left",
         family=fonte,
     )
     ax.text(
-        0.53,
+        0.55,
         y_pos,
         lbl_d,
         color=cor_subtexto,
-        fontsize=8.3,
+        fontsize=8.2,
         fontweight="bold",
         va="center",
         ha="left",
         family=fonte,
     )
     ax.text(
-        0.695,
+        0.715,
         y_pos,
         val_d,
         color=cor_texto,
-        fontsize=8.3,
+        fontsize=8.2,
         va="center",
         ha="left",
         family=fonte,
     )
-    y_pos -= 0.023
+    y_pos -= 0.022
+
+  info_extra = f"Arquivo analisado: {nome_arquivo}"
+  if rol_la and rol_loa:
+    info_extra = (
+        f"Rolamentos Cadastrados: LA = {rol_la}  |  LOA = {rol_loa}   •  "
+        f" Arquivo: {nome_arquivo}"
+    )
 
   ax.text(
       0.08,
-      0.733,
-      f"Arquivo analisado: {nome_arquivo}",
+      0.725,
+      info_extra,
       color=cor_subtexto,
       fontsize=7.6,
       style="italic",
@@ -680,7 +806,7 @@ def gerar_pagina_laudo(
   # --- 4. SEÇÃO 2: INTEGRIDADE DAS PISTAS (BPFO, BPFI, BSF) ---
   ax.text(
       0.06,
-      0.695,
+      0.688,
       "2. AVALIAÇÃO ESPECTRAL POR COMPONENTE (INTEGRIDADE DAS PISTAS)",
       color=cor_navy,
       fontsize=9.5,
@@ -690,7 +816,7 @@ def gerar_pagina_laudo(
       family=fonte,
   )
 
-  y_card = 0.600
+  y_card = 0.594
   for codigo in ["BPFO", "BPFI", "BSF"]:
     info = analise_pistas[codigo]
     alerta = info["suspeita_falha"]
@@ -702,19 +828,18 @@ def gerar_pagina_laudo(
         FancyBboxPatch(
             (0.06, y_card),
             0.88,
-            0.080,
+            0.079,
             boxstyle="round,pad=0.006,rounding_size=0.008",
             facecolor="white",
             edgecolor=borda_card,
             linewidth=0.9,
         )
     )
-    # Faixa lateral colorida do componente
     ax.add_patch(
         FancyBboxPatch(
             (0.06, y_card),
             0.008,
-            0.080,
+            0.079,
             boxstyle="square,pad=0",
             facecolor=CORES_FALHA[codigo],
             edgecolor="none",
@@ -727,7 +852,7 @@ def gerar_pagina_laudo(
     )
     ax.text(
         0.082,
-        y_card + 0.061,
+        y_card + 0.060,
         titulo_comp,
         color=cor_navy,
         fontsize=8.6,
@@ -737,10 +862,9 @@ def gerar_pagina_laudo(
         family=fonte,
     )
 
-    # Selo de status à direita
     ax.add_patch(
         FancyBboxPatch(
-            (0.755, y_card + 0.050),
+            (0.755, y_card + 0.049),
             0.172,
             0.022,
             boxstyle="round,pad=0.003,rounding_size=0.006",
@@ -750,7 +874,7 @@ def gerar_pagina_laudo(
     )
     ax.text(
         0.841,
-        y_card + 0.061,
+        y_card + 0.060,
         info["badge"],
         color=cor_status,
         fontsize=7.3,
@@ -763,7 +887,7 @@ def gerar_pagina_laudo(
     texto_wrap = textwrap.fill(info["resumo_tecnico"], width=95)
     ax.text(
         0.082,
-        y_card + 0.041,
+        y_card + 0.040,
         texto_wrap,
         color=cor_texto,
         fontsize=7.9,
@@ -772,12 +896,12 @@ def gerar_pagina_laudo(
         family=fonte,
         linespacing=1.35,
     )
-    y_card -= 0.095
+    y_card -= 0.094
 
   # --- 5. SEÇÃO 3: PARECER TÉCNICO CONSOLIDADO ---
   ax.text(
       0.06,
-      0.388,
+      0.384,
       "3. PARECER TÉCNICO CONSOLIDADO (PISTAS E LUBRIFICAÇÃO)",
       color=cor_navy,
       fontsize=9.5,
@@ -794,7 +918,7 @@ def gerar_pagina_laudo(
 
   ax.add_patch(
       FancyBboxPatch(
-          (0.06, 0.245),
+          (0.06, 0.242),
           0.88,
           0.128,
           boxstyle="round,pad=0.008,rounding_size=0.01",
@@ -820,16 +944,17 @@ def gerar_pagina_laudo(
 
   if baixa_lubrificacao and aceita_lub:
     txt_lub = (
-        "Condição de Lubrificação: Detectado indício de baixa lubrificação"
+        "Condição de Lubrificação: Detectada falta de lubrificação"
         " (atrito/impulsividade elevada) em rolamento que aceita"
         " relubrificação. Deve ser feita a lubrificação e realizada uma nova"
         " auscultação."
     )
   elif baixa_lubrificacao and not aceita_lub:
     txt_lub = (
-        "Condição de Lubrificação: Detectado nível elevado de impulsividade /"
-        " atrito na banda de alta frequência. Este ativo possui rolamento que"
-        " não aceita lubrificação, exigindo acompanhamento criterioso."
+        "Condição de Lubrificação: Detectado indício de baixa lubrificação /"
+        " atrito elevado, porém este rolamento é BLINDADO (não aceita"
+        " relubrificação). Deve-se focar na avaliação de possíveis falhas"
+        " mecânicas e acompanhar a evolução do ativo."
     )
   elif aceita_lub:
     txt_lub = (
@@ -839,8 +964,9 @@ def gerar_pagina_laudo(
     )
   else:
     txt_lub = (
-        "Condição de Lubrificação: Rolamento selado (não aceita lubrificação),"
-        " operando com níveis estáveis na faixa avaliada."
+        "Condição de Lubrificação: Rolamento BLINDADO (não aceita"
+        " lubrificação), operando com níveis estáveis e sem indícios de falta"
+        " de lubrificação."
     )
 
   titulo_cond = (
@@ -850,7 +976,7 @@ def gerar_pagina_laudo(
   )
   ax.text(
       0.08,
-      0.355,
+      0.352,
       titulo_cond,
       color=cor_titulo_parecer,
       fontsize=8.8,
@@ -861,7 +987,7 @@ def gerar_pagina_laudo(
   )
   ax.text(
       0.08,
-      0.335,
+      0.332,
       textwrap.fill(txt_pistas, width=96),
       color=cor_texto,
       fontsize=8.0,
@@ -872,7 +998,7 @@ def gerar_pagina_laudo(
   )
   ax.text(
       0.08,
-      0.285,
+      0.282,
       textwrap.fill(txt_lub, width=96),
       color=cor_texto,
       fontsize=8.0,
@@ -885,7 +1011,7 @@ def gerar_pagina_laudo(
   # --- 6. SEÇÃO 4: DIRETRIZES E EXIGÊNCIAS DE CAMPO ---
   ax.text(
       0.06,
-      0.215,
+      0.212,
       "4. DIRETRIZES E EXIGÊNCIAS TÉCNICAS DE MANUTENÇÃO",
       color=cor_navy,
       fontsize=9.5,
@@ -896,7 +1022,7 @@ def gerar_pagina_laudo(
   )
   ax.add_patch(
       FancyBboxPatch(
-          (0.06, 0.085),
+          (0.06, 0.082),
           0.88,
           0.115,
           boxstyle="round,pad=0.008,rounding_size=0.01",
@@ -912,6 +1038,12 @@ def gerar_pagina_laudo(
         "• LUBRIFICAÇÃO OBRIGATÓRIA: Executar a lubrificação do rolamento"
         " conforme plano técnico e realizar nova auscultação logo após a"
         " estabilização."
+    )
+  elif baixa_lubrificacao and not aceita_lub:
+    acoes.append(
+        "• ROLAMENTO BLINDADO — FOCO EM FALHAS: Como o rolamento é blindado"
+        " e não permite relubrificação, focar na avaliação de possíveis falhas"
+        " e programar acompanhamento preditivo."
     )
   if pistas_com_alerta or baixa_lubrificacao:
     acoes.append(
@@ -929,7 +1061,7 @@ def gerar_pagina_laudo(
       " controle operacional da unidade para acompanhamento de tendência."
   )
 
-  y_acao = 0.186
+  y_acao = 0.183
   for acao in acoes:
     wrapped = textwrap.fill(acao, width=96)
     ax.text(
@@ -1002,207 +1134,4 @@ def processar_automatico(caminho_audio, trecho, perfil):
   ax1 = plt.subplot(3, 1, 1)
   tempo = np.linspace(0, len(y) / sr, len(envelope))
   ax1.plot(tempo, envelope, color="#0284c7", alpha=0.9)
-  ax1.set_title(
-      "1. Envelope Isolado de Rolamento (Banda"
-      f" {low_ef:.0f} Hz - {high_ef:.0f} Hz)"
-  )
-  ax1.set_ylabel("Amplitude")
-  ax1.grid(True, linestyle="--", alpha=0.6)
-
-  ax2 = plt.subplot(3, 1, 2)
-  img = librosa.display.specshow(
-      S_db, sr=sr, x_axis="time", y_axis="log", cmap="magma", ax=ax2
-  )
-  ax2.set_ylim(low_ef, high_ef)
-  ax2.set_title(
-      "2. Espectrograma Isolado (Faixa de Rolamento:"
-      f" {low_ef:.0f} Hz - {high_ef:.0f} Hz)"
-  )
-  ax2.set_ylabel("Freq (Hz)")
-  plt.colorbar(img, ax=ax2, format="%+2.0f dB")
-
-  ax3 = plt.subplot(3, 1, 3)
-  ax3.plot(
-      fft_freqs,
-      fft_mag,
-      color="#0f172a",
-      linewidth=1.2,
-      label="Espectro de Envoltória (Welch Mediana)",
-      zorder=3,
-  )
-
-  for codigo, info in analise_pistas.items():
-    cor = CORES_FALHA.get(codigo, "black")
-    f_low, f_high = info["f_low"], info["f_high"]
-
-    ax3.axvspan(
-        f_low,
-        f_high,
-        color=cor,
-        alpha=0.16,
-        zorder=1,
-        label=f"Região {codigo} ({rpm_faixa_str})",
-    )
-    ax3.axvline(
-        x=f_high, color=cor, linestyle="--", linewidth=1.4, alpha=0.8, zorder=2
-    )
-    ax3.axvspan(f_low * 2, f_high * 2, color=cor, alpha=0.07, zorder=1)
-    ax3.axvline(
-        x=f_high * 2,
-        color=cor,
-        linestyle=":",
-        alpha=0.5,
-        linewidth=1,
-        zorder=2,
-    )
-
-    if info["suspeita_falha"]:
-      ax3.scatter(
-          [info["freq_dominante"]],
-          [info["pico_dominante"]],
-          color=cor,
-          s=55,
-          zorder=5,
-          edgecolors="black",
-      )
-      ax3.annotate(
-          f"{codigo}: {info['freq_dominante']:.1f} Hz",
-          xy=(info["freq_dominante"], info["pico_dominante"]),
-          xytext=(4, 6),
-          textcoords="offset points",
-          fontsize=8,
-          fontweight="bold",
-          color=cor,
-      )
-
-  ax3.set_title(
-      "3. Espectro de Envoltória — Método de Welch/Mediana (Faixa"
-      f" {rpm_faixa_str})"
-  )
-  ax3.set_xlabel("Frequência (Hz)")
-  ax3.set_ylabel("Amplitude")
-  ax3.set_xlim(0, 350)
-  ax3.grid(True, linestyle="--", alpha=0.6)
-  ax3.legend(loc="upper right", framealpha=0.92, fontsize=8.5)
-
-  plt.tight_layout(rect=[0, 0, 1, 0.89])
-  aplicar_marca_vinci_graficos(fig_graficos, logo_vinci, data_assinatura)
-
-  # --- INDICADORES DE LUBRIFICAÇÃO / IMPULSIVIDADE ---
-  rms_env = np.sqrt(np.mean(envelope**2))
-  pico_env = np.max(envelope)
-  fator_crista = (pico_env / rms_env) if rms_env > 0 else 0.0
-
-  freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
-  idx_lub = np.where((freqs >= low_ef) & (freqs <= min(high_ef, 5000)))[0]
-  energia_lubrificacao = (
-      np.mean(S_db[idx_lub, :]) if len(idx_lub) > 0 else -100
-  )
-
-  baixa_lubrificacao = (fator_crista > 6.0) or (energia_lubrificacao > -32.0)
-  pistas_com_alerta = [
-      cod for cod, dados in analise_pistas.items() if dados["suspeita_falha"]
-  ]
-
-  if pistas_com_alerta and (baixa_lubrificacao and aceita_lub):
-    status_geral = (
-        f"ALERTA ({', '.join(pistas_com_alerta)} + Baixa Lubrificação): Pode"
-        " ser início de falha ou pico externo; lubrificar e realizar nova"
-        " auscultação."
-    )
-  elif pistas_com_alerta:
-    status_geral = (
-        f"ALERTA ({', '.join(pistas_com_alerta)}): Pode ser início de falha ou"
-        " pico de outra fonte — EXIGIDA nova auscultação para confirmação."
-    )
-  elif baixa_lubrificacao and aceita_lub:
-    status_geral = (
-        "PISTAS ÍNTEGRAS | ALERTA LUBRIFICAÇÃO: Deve ser feita a lubrificação"
-        " e realizar uma nova auscultação."
-    )
-  elif baixa_lubrificacao:
-    status_geral = (
-        "PISTAS ÍNTEGRAS | ATENÇÃO ATRITO: Impulsividade elevada (não aceita"
-        " lubrificação) — realizar nova auscultação."
-    )
-  else:
-    status_geral = (
-        "SAUDÁVEL: Pistas íntegras e sem sinais de início de falha ou baixa"
-        " lubrificação."
-    )
-
-  # --- PÁGINA 2: LAUDO TÉCNICO CENTRALIZADO ---
-  fig_laudo = gerar_pagina_laudo(
-      trecho=trecho,
-      tipo=tipo,
-      subtipo=subtipo,
-      nome_arquivo=nome_arquivo,
-      data_assinatura=data_assinatura,
-      rpm_faixa_str=rpm_faixa_str,
-      aceita_lub=aceita_lub,
-      low_ef=low_ef,
-      high_ef=high_ef,
-      fator_crista=fator_crista,
-      analise_pistas=analise_pistas,
-      pistas_com_alerta=pistas_com_alerta,
-      baixa_lubrificacao=baixa_lubrificacao,
-      logo_img=logo_vinci,
-  )
-
-  # --- UNIFICAR EM UM ÚNICO PDF (2 PÁGINAS) ---
-  caminho_pdf_unificado = f"VINCI_{trecho}_{tipo.replace(' ', '_')}_Relatorio.pdf"
-  with PdfPages(caminho_pdf_unificado) as pdf:
-    pdf.savefig(fig_graficos, bbox_inches="tight")
-    pdf.savefig(fig_laudo)
-
-  plt.close(fig_graficos)
-  plt.close(fig_laudo)
-
-  enviar_para_planilha(
-      data_assinatura,
-      tipo,
-      subtipo,
-      trecho,
-      rpm_faixa_str,
-      nome_arquivo,
-      status_geral,
-  )
-  return caminho_pdf_unificado, status_geral, data_assinatura
-
-
-if uploaded_file is not None:
-  caminho_temp = uploaded_file.name
-  with open(caminho_temp, "wb") as f:
-    f.write(uploaded_file.getbuffer())
-
-  if st.button("🚀 Gerar Relatório Técnico"):
-    if not trecho_selecionado:
-      st.error(
-          "⚠️ Por favor, preencha o código do trecho / tag antes de gerar o"
-          " relatório."
-      )
-    else:
-      with st.spinner(
-          f"Analisando {trecho_selecionado} com Welch/Mediana"
-          f" ({perfil_ativo['rpm_min']} a {perfil_ativo['rpm_max']} RPM)..."
-      ):
-        pdf_gerado, status, emissao_str = processar_automatico(
-            caminho_temp, trecho_selecionado, perfil_ativo
-        )
-
-      st.success("✅ Relatório emitido e registrado com sucesso!")
-      st.info(
-          f"**Ativo:** {tipo_ativo} ({perfil_ativo['subtipo']}) | **Trecho:**"
-          f" `{trecho_selecionado}`\n\n"
-          f"**Rotação:** {perfil_ativo['rpm_min']} a"
-          f" {perfil_ativo['rpm_max']} RPM | **Emissão:** {emissao_str}\n\n"
-          f"**Diagnóstico:** {status}"
-      )
-
-      with open(pdf_gerado, "rb") as file:
-        st.download_button(
-            label="📥 Baixar Relatório Completo (PDF - 2 Páginas)",
-            data=file,
-            file_name=pdf_gerado,
-            mime="application/pdf",
-        )
+  ax1.set

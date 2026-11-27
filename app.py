@@ -167,7 +167,7 @@ CADASTRO_BOMBAS = {
     },
 }
 
-# --- 2. CADASTRO DE MOTOREDUTORES DAS ESTEIRAS (BHS) ---
+# --- 2. CADASTRO DE MOTORREDUTORES DAS ESTEIRAS (BHS) ---
 # Formato: TAG: (Trecho, BHS, Rolamento LA, Rolamento LOA) — todos blindados
 DADOS_BHS_RAW = {
     # Azul (MCP1)
@@ -232,9 +232,9 @@ DADOS_BHS_RAW = {
     "MAOESLP036": ("TL4.18", "Latam (MCP4)", "6304-2Z", "6304-2RS"),
 }
 
-CADASTRO_MOTOREDUTORES = {
+CADASTRO_MOTORREDUTORES = {
     tag: {
-        "tipo": "Moto Redutor",
+        "tipo": "Motorredutor",
         "subtipo": f"BHS {bhs}",
         "trecho_bhs": trecho_bhs,
         "rolamento_la": rol_la,
@@ -250,7 +250,7 @@ CADASTRO_MOTOREDUTORES = {
     for tag, (trecho_bhs, bhs, rol_la, rol_loa) in DADOS_BHS_RAW.items()
 }
 
-CADASTRO_ATIVOS = {**CADASTRO_BOMBAS, **CADASTRO_MOTOREDUTORES}
+CADASTRO_ATIVOS = {**CADASTRO_BOMBAS, **CADASTRO_MOTORREDUTORES}
 
 CONFIG_PADRAO_OUTROS = {
     "Bomba": {
@@ -266,8 +266,8 @@ CONFIG_PADRAO_OUTROS = {
         "highcut": 8000,
         "lp_env": 500,
     },
-    "Moto Redutor": {
-        "subtipo": "Moto Redutor (Não Cadastrado)",
+    "Motorredutor": {
+        "subtipo": "Motorredutor (Não Cadastrado)",
         "trecho_bhs": None,
         "rolamento_la": None,
         "rolamento_loa": None,
@@ -1284,7 +1284,7 @@ trecho_selecionado = trecho_input.upper().strip()
 # --- 2. TIPO DE ATIVO (FALLBACK SE A TAG NÃO ESTIVER CADASTRADA) ---
 tipo_ativo_manual = st.radio(
     "⚙️ Tipo de Equipamento (caso a tag não esteja cadastrada):",
-    options=["Bomba", "Moto Redutor"],
+    options=["Bomba", "Motorredutor"],
     horizontal=True,
 )
 
